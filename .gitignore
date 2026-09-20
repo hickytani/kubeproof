@@ -1,0 +1,7 @@
+*.exe
+*.test
+*.out
+.env
+.env.*
+kubeconfig
+*.kubeconfig
