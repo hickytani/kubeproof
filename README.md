@@ -1,63 +1,115 @@
 # StateProof
 
-A read-only Kubernetes runtime truth verification engine that builds evidence chains from declared workload state to live runtime identity.
+## Kubernetes Runtime Truth Verification
 
-Kubernetes exposes desired state and runtime state through different objects, but operators often have to manually connect those objects to determine whether what was declared is actually what is running.
+StateProof is a read-only Kubernetes runtime truth verification engine that builds evidence chains from declared workload state to live runtime identity.
 
-## What this tool checks
+The core question is: **What did we declare, what is actually running, and what can Kubernetes prove?** Kubernetes exposes desired state and runtime state through different objects. StateProof connects those objects into an evidence chain instead of presenting generic monitoring metrics.
 
-StateProof inspects Kubernetes objects and verifies whether the declared workload identity still matches the currently observed runtime image identity. It follows Deployment, ReplicaSet ownership, Pod, container status, and runtime image identity evidence from the Kubernetes API.
+## The evidence chain
 
-It does not claim to know whether application code is consuming a specific Secret or ConfigMap value. Application memory, effective in-memory values, process behavior, and application consumption remain UNKNOWN or UNOBSERVABLE.
-
-## Status model
-
-- MATCH
-- MISMATCH
-- STALE
-- PARTIAL
-- UNKNOWN
-- UNOBSERVABLE
-- ERROR
-
-## Quickstart
-
-Build:
-
-```powershell
-cd C:\Users\prasu\Downloads\cli-hunt\k8s-truth
-C:\tools\go\bin\go.exe build -o stateproof.exe .
+```text
+Deployment
+	|
+	v
+ReplicaSet
+	|
+	v
+Pod
+	|
+	v
+Container
+	|
+	v
+Runtime image identity
 ```
 
-Display help:
+### Declared
 
-```powershell
-.\stateproof.exe --help
+The image declared by the Deployment PodSpec.
+
+### Observed
+
+The Pods located through Deployment and ReplicaSet ownership, plus the container runtime `imageID` reported by Kubernetes.
+
+### Proven
+
+StateProof can establish whether observed runtime image identity is consistent with the declared workload identity, and can expose the supporting observations and limitations.
+
+### Unobservable
+
+Kubernetes object state alone cannot prove application memory, effective in-memory configuration, actual Secret value consumption, whether application code consumed a configuration value, arbitrary process memory, or semantic application behavior. StateProof reports those boundaries as UNKNOWN or UNOBSERVABLE rather than guessing.
+
+## Commands
+
+```text
+stateproof verify deployment <name> --namespace <namespace>
+stateproof verify workload <name> --namespace <namespace>
+stateproof scan <namespace>
+stateproof explain deployment <name> --namespace <namespace>
+stateproof evidence deployment <name> --namespace <namespace> --json
 ```
 
-Verify a deployment:
+- `verify deployment` reads a Deployment and its owned Pods, then reports runtime identity evidence.
+- `verify workload` identifies whether a named workload is a Deployment, StatefulSet, or DaemonSet. It does not perform full verification for non-Deployment workloads.
+- `scan` summarizes Deployment verification results in a namespace.
+- `explain deployment` renders the evidence and limitations in explanatory text.
+- `evidence deployment --json` emits the verification result as structured JSON.
 
-```powershell
-.\stateproof.exe verify deployment demo -n default
+### Illustrative output
+
+The following is illustrative output, not a claim about a real production cluster:
+
+```text
+$ stateproof verify deployment api -n production
+TRUTH
+Subject: deployment/production/api
+Status: MATCH
+Desired: api:<tag>
+Observed: all observed pod imageIDs matched declared image identity
+Source: Kubernetes API
 ```
 
-Explain a result:
+## Architecture
 
-```powershell
-.\stateproof.exe explain deployment demo -n default
+```mermaid
+flowchart TD
+	A[CLI] --> B[Cobra Commands]
+	B --> C[Kubernetes client-go]
+	C --> D[Kubernetes API]
+	D --> E[Truth Verifier]
+	E --> F[Evidence Model]
+	F --> G[Human Output]
+	F --> H[JSON Evidence]
 ```
 
-Emit structured evidence:
+The production path is CLI -> Cobra command -> Kubernetes client -> real Kubernetes API -> truth verifier -> evidence model -> human-readable or JSON output.
+
+## Installation and usage
+
+Prerequisites:
+
+- Go
+- `kubectl`
+- access to a Kubernetes cluster
+- a valid kubeconfig and context
+
+StateProof uses the normal Kubernetes configuration from the environment. Inspect the available context before running it:
 
 ```powershell
-.\stateproof.exe evidence deployment demo -n default --json
+kubectl config get-contexts
+kubectl config current-context
+kubectl get nodes
 ```
 
-Scan a namespace:
+Build and run it against a safe Deployment:
 
 ```powershell
-.\stateproof.exe scan default
+go build -o stateproof.exe .
+.\stateproof.exe verify deployment <name> -n <namespace>
 ```
+
+An explicit context can be selected with `--context <context>`.
 
 ## Real-cluster demo
 
@@ -69,24 +121,74 @@ kubectl get deployment -A
 .\stateproof.exe verify deployment <name> -n <namespace>
 ```
 
-## Security boundaries
+## Security and permissions
 
-This tool is read-only. It inspects:
+StateProof is intentionally read-only. The recommended RBAC policy in [`deploy/rbac-readonly.yaml`](deploy/rbac-readonly.yaml) grants only `get`, `list`, and `watch` for the workload resources it reads. It does not require cluster-admin.
 
-- Deployment metadata
-- ReplicaSet relationships
-- Pod metadata and container status
-- imageID values from Pod runtime status
-- Secret and ConfigMap metadata only as references when needed
+StateProof does not perform:
 
-It does not read Secret data or expose secret bytes.
-
-## Verified status in this environment
-
-The repository was verified with:
-
-```powershell
-C:\tools\go\bin\go.exe test ./...
+```text
+create  update  patch  delete  exec  attach  port-forward  restart
 ```
 
-This passed in the current environment. Real-cluster E2E was blocked because no kubeconfig-backed Kubernetes API was available.
+It does not request Secret objects or extract Secret values. See [`SECURITY.md`](SECURITY.md) for the complete boundary.
+
+## Testing
+
+Unit and object-level Kubernetes tests run without a Kubernetes cluster, Docker, kind, or Minikube:
+
+```powershell
+go test ./...
+go vet ./...
+go build ./...
+```
+
+The production CLI uses a real kubeconfig-backed Kubernetes API. This environment currently has no configured Kubernetes context, so real Kubernetes E2E has not been executed.
+
+## Repository structure
+
+```text
+cmd/                    Cobra command definitions
+internal/k8s/            Read-only Kubernetes client access
+internal/truth/          Truth verifier, evidence model, and tests
+deploy/                 Least-privilege RBAC manifest
+main.go                 CLI entrypoint
+README.md               Project overview and usage
+ARCHITECTURE.md         Implementation boundaries
+SECURITY.md             Read-only and evidence limitations
+DEMO.md                 Existing-cluster inspection flow
+go.mod, go.sum          Go module metadata
+```
+
+## Status vocabulary
+
+The evidence model includes `MATCH`, `MISMATCH`, `STALE`, `PARTIAL`, `UNKNOWN`, `UNOBSERVABLE`, and `ERROR`. Current Deployment verification primarily produces `MATCH`, `PARTIAL`, and `UNKNOWN`; the remaining values document the broader evidence boundary without implying unsupported proof.
+
+## GitHub metadata
+
+Recommended repository name:
+
+```text
+stateproof
+```
+
+Recommended description:
+
+```text
+Read-only Kubernetes runtime truth verification - building evidence chains from declared workload state to live runtime identity.
+```
+
+Suggested topics:
+
+```text
+kubernetes
+go
+golang
+cloud-native
+runtime-verification
+kubernetes-security
+observability
+infrastructure
+devops
+systems
+```

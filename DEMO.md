@@ -29,19 +29,17 @@ C:\tools\go\bin\go.exe build -o stateproof.exe .
 .\stateproof.exe scan <namespace>
 ```
 
-## 4. Trigger divergence
+## 4. Trigger divergence safely
 
-```powershell
 Only test divergence on a temporary isolated workload that you created for this purpose. Do not mutate an existing workload.
-```
 
 ## 5. Observe evidence
 
 ```powershell
-kubectl get deployment demo -o yaml
-kubectl get replicasets -o wide
-kubectl get pods -o wide
-.\truth.exe evidence deployment demo -n default --json
+kubectl get deployment <name> -n <namespace> -o yaml
+kubectl get replicasets -n <namespace> -o wide
+kubectl get pods -n <namespace> -o wide
+.\stateproof.exe evidence deployment <name> -n <namespace> --json
 ```
 
 ## 6. Reconcile and verify again
