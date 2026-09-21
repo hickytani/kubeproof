@@ -19,6 +19,7 @@ func PrintTruthResult(res truth.VerificationResult) {
 	fmt.Printf("Desired: %s\n", res.Desired)
 	if res.Observed != "" {
 		fmt.Printf("Observed: %s\n", res.Observed)
+		fmt.Printf("Replicas: %d desired, %d observed, %d matching, %d divergent\n", res.Summary.Desired, res.Summary.Observed, res.Summary.Matching, res.Summary.Divergent)
 	}
 	fmt.Printf("Source: %s\n", res.Source)
 	fmt.Printf("Timestamp: %s\n", res.Timestamp.Format(time.RFC3339))
@@ -32,6 +33,12 @@ func PrintTruthResult(res truth.VerificationResult) {
 		fmt.Println("OBSERVATIONS")
 		for _, obs := range res.Observations {
 			fmt.Printf("  - %s %s -> %s (%s)\n", obs.Kind, obs.Subject, obs.Value, obs.Status)
+		}
+	}
+	if len(res.Findings) > 0 {
+		fmt.Println("FINDINGS")
+		for _, finding := range res.Findings {
+			fmt.Printf("  - %s %s: %s\n", finding.Status, finding.Subject, finding.Message)
 		}
 	}
 }
@@ -59,6 +66,7 @@ func BuildExplainText(res truth.VerificationResult) string {
 		fmt.Sprintf("Status: %s", res.Status),
 		fmt.Sprintf("Desired: %s", res.Desired),
 		fmt.Sprintf("Observed: %s", res.Observed),
+		fmt.Sprintf("Replicas: %d desired, %d observed, %d matching, %d divergent", res.Summary.Desired, res.Summary.Observed, res.Summary.Matching, res.Summary.Divergent),
 	}
 	if len(res.Observations) > 0 {
 		lines = append(lines, "")
@@ -72,6 +80,12 @@ func BuildExplainText(res truth.VerificationResult) string {
 		lines = append(lines, "LIMITS")
 		for _, lim := range res.Limitations {
 			lines = append(lines, fmt.Sprintf("  ? %s", lim))
+		}
+	}
+	if len(res.Findings) > 0 {
+		lines = append(lines, "", "FINDINGS")
+		for _, finding := range res.Findings {
+			lines = append(lines, fmt.Sprintf("  - %s %s: %s", finding.Status, finding.Subject, finding.Message))
 		}
 	}
 	return strings.Join(lines, "\n")

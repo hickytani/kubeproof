@@ -36,7 +36,11 @@ var verifyCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			res := truth.BuildDeploymentResult(dep, pods)
+			replicaSets, err := k8s.GetReplicaSetsForDeployment(client, namespace, dep)
+			if err != nil {
+				return err
+			}
+			res := truth.BuildDeploymentResultWithReplicaSets(dep, replicaSets, pods)
 			output.PrintTruthResult(res)
 			return nil
 		case "workload":

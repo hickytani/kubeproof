@@ -30,9 +30,11 @@ StateProof currently verifies Deployment runtime identity from the Kubernetes AP
 
 - the declared container and init-container images in a Deployment PodSpec
 - the ReplicaSet ownership path used to locate the Deployment's Pods
-- the runtime `imageID` reported for each observed container
+- the declared container name and image, observed container image, runtime `imageID`, readiness, state, and restart count where Kubernetes reports them
 - whether runtime image identity is consistent with the declared image repository
+- desired versus observed replica counts
 - partial and unknown evidence when replicas disagree or runtime identity is missing
+- stale ReplicaSet revision evidence when revision annotations are available
 - an evidence result in human-readable or JSON form
 
 The verifier uses the Pod's `status.containerStatuses[].imageID` as runtime identity. For a tagged declaration such as `nginx:1.25`, an image ID containing the same repository and a digest is treated as a repository-level match. A digest-pinned declaration can also match when its digest appears in the runtime image ID.
@@ -76,7 +78,7 @@ Deployment-to-Pod discovery is implemented as follows:
 4. Keep the Pod when the ReplicaSet is owned by the named Deployment.
 5. Compare each discovered container's `imageID` with the Deployment's declared image references.
 
-ReplicaSet revision consistency is not independently verified. The evidence graph describes the ownership and runtime identity observations that the current implementation actually reads.
+When Deployment and ReplicaSet revision annotations are available, StateProof reports a stale-ReplicaSet finding when they differ. This is annotation comparison, not a full rollout controller-state analysis.
 
 ## What StateProof can prove
 
@@ -87,6 +89,7 @@ Within that boundary, StateProof can produce:
 - `UNKNOWN` when no Pods or usable runtime identity are available
 - the declared image, observed image IDs, source fields, timestamps, limitations, and evidence edges
 - explicit limitations about application-level behavior and runtime process internals
+- replica summary counts and structured findings for runtime divergence, missing replicas, and stale revisions
 
 The model also defines `MISMATCH`, `STALE`, `UNOBSERVABLE`, and `ERROR`. Current Deployment verification primarily emits `MATCH`, `PARTIAL`, and `UNKNOWN`; it does not claim that every status is independently generated today.
 
@@ -99,7 +102,7 @@ StateProof does not currently prove:
 - effective in-memory configuration
 - Secret consumption or ConfigMap consumption
 - whether a process used a referenced value
-- rollout revision consistency
+- complete rollout revision consistency beyond comparing available Deployment and ReplicaSet revision annotations
 - a separate comparison of `ContainerStatus.image` versus `PodSpec.image`
 - full verification for StatefulSets or DaemonSets
 
@@ -147,6 +150,8 @@ StateProof reads existing objects and does not create infrastructure or mutate w
 - `scan` lists Deployment results for a namespace using the same read-only verification path.
 - `explain deployment` renders the computed result, observations, and limitations as explanatory text.
 - `evidence deployment --json` emits the computed result as structured JSON. Without `--json`, it prints the human-readable result.
+
+`scan` also reports the number of inspected workloads and counts of actual `MATCH`, `PARTIAL`, and `UNKNOWN` results before the per-workload statuses.
 
 ### Illustrative output
 

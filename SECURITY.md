@@ -35,7 +35,7 @@ Kubeconfig files and credentials belong to the operator environment and must not
 
 ## Evidence trust boundary
 
-StateProof can connect declared Deployment images, ReplicaSet ownership, Pod ownership, and reported container `imageID` values. That is evidence about Kubernetes object state and runtime identity as reported by the API.
+StateProof can connect declared Deployment images, ReplicaSet ownership, Pod ownership, reported container `imageID` values, replica counts, and selected container status fields. That is evidence about Kubernetes object state and runtime identity as reported by the API.
 
 It does not prove:
 

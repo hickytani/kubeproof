@@ -7,24 +7,45 @@ import (
 type Status string
 
 const (
-	StatusMatch       Status = "MATCH"
-	StatusMismatch    Status = "MISMATCH"
-	StatusStale       Status = "STALE"
-	StatusPartial     Status = "PARTIAL"
-	StatusUnknown     Status = "UNKNOWN"
+	StatusMatch        Status = "MATCH"
+	StatusMismatch     Status = "MISMATCH"
+	StatusStale        Status = "STALE"
+	StatusPartial      Status = "PARTIAL"
+	StatusUnknown      Status = "UNKNOWN"
 	StatusUnobservable Status = "UNOBSERVABLE"
-	StatusError       Status = "ERROR"
+	StatusError        Status = "ERROR"
 )
 
 type Observation struct {
-	Kind       string    `json:"kind"`
-	Subject    string    `json:"subject"`
-	Value      string    `json:"value"`
-	Source     string    `json:"source"`
-	Timestamp  time.Time `json:"timestamp"`
-	Method     string    `json:"method"`
-	Status     Status    `json:"status"`
-	Limitations []string `json:"limitations,omitempty"`
+	Kind          string    `json:"kind"`
+	Subject       string    `json:"subject"`
+	Value         string    `json:"value"`
+	Expected      string    `json:"expected,omitempty"`
+	ObservedImage string    `json:"observed_image,omitempty"`
+	State         string    `json:"state,omitempty"`
+	Ready         bool      `json:"ready,omitempty"`
+	RestartCount  int32     `json:"restart_count,omitempty"`
+	Source        string    `json:"source"`
+	Timestamp     time.Time `json:"timestamp"`
+	Method        string    `json:"method"`
+	Status        Status    `json:"status"`
+	Limitations   []string  `json:"limitations,omitempty"`
+}
+
+type Finding struct {
+	Code     string        `json:"code"`
+	Status   Status        `json:"status"`
+	Subject  string        `json:"subject"`
+	Message  string        `json:"message"`
+	Evidence []Observation `json:"evidence,omitempty"`
+}
+
+type ReplicaSummary struct {
+	Desired   int `json:"desired"`
+	Observed  int `json:"observed"`
+	Matching  int `json:"matching"`
+	Divergent int `json:"divergent"`
+	Unknown   int `json:"unknown"`
 }
 
 type EvidenceNode struct {
@@ -36,9 +57,9 @@ type EvidenceNode struct {
 }
 
 type EvidenceEdge struct {
-	From     string       `json:"from"`
-	To       string       `json:"to"`
-	Type     string       `json:"type"`
+	From     string        `json:"from"`
+	To       string        `json:"to"`
+	Type     string        `json:"type"`
 	Evidence []Observation `json:"evidence,omitempty"`
 }
 
@@ -53,5 +74,7 @@ type VerificationResult struct {
 	Method        string         `json:"method"`
 	Limitations   []string       `json:"limitations,omitempty"`
 	Observations  []Observation  `json:"observations,omitempty"`
+	Findings      []Finding      `json:"findings,omitempty"`
+	Summary       ReplicaSummary `json:"summary"`
 	EvidenceChain []EvidenceEdge `json:"evidence_chain,omitempty"`
 }

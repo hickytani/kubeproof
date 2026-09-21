@@ -29,7 +29,12 @@ var scanCmd = &cobra.Command{
 				results[dep.Name] = truth.VerificationResult{Claim: "deployment verify", Subject: dep.Name, Status: truth.StatusUnknown, Source: "Kubernetes API", Limitations: []string{err.Error()}}
 				continue
 			}
-			results[dep.Name] = truth.BuildDeploymentResult(&dep, pods)
+			replicaSets, err := k8s.GetReplicaSetsForDeployment(client, namespace, &dep)
+			if err != nil {
+				results[dep.Name] = truth.VerificationResult{Claim: "deployment verify", Subject: dep.Name, Status: truth.StatusUnknown, Source: "Kubernetes API", Limitations: []string{err.Error()}}
+				continue
+			}
+			results[dep.Name] = truth.BuildDeploymentResultWithReplicaSets(&dep, replicaSets, pods)
 		}
 		out := truth.BuildScanSummary(deployments, results)
 		output.PrintScanSummary(out)

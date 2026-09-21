@@ -12,17 +12,29 @@ import (
 )
 
 type DeploymentCheck struct {
-	Deployment *appsv1.Deployment
-	Pods       []corev1.Pod
-	Status     Status
-	Evidence   []Observation
+	Deployment  *appsv1.Deployment
+	Pods        []corev1.Pod
+	ReplicaSets []appsv1.ReplicaSet
+	Status      Status
+	Evidence    []Observation
+	Findings    []Finding
+	Summary     ReplicaSummary
 	Limitations []string
-	Graph      []EvidenceEdge
+	Graph       []EvidenceEdge
 }
 
 func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) DeploymentCheck {
+	return verifyDeployment(deployment, nil, pods)
+}
+
+func VerifyDeploymentWithReplicaSets(deployment *appsv1.Deployment, replicaSets []appsv1.ReplicaSet, pods []corev1.Pod) DeploymentCheck {
+	return verifyDeployment(deployment, replicaSets, pods)
+}
+
+func verifyDeployment(deployment *appsv1.Deployment, replicaSets []appsv1.ReplicaSet, pods []corev1.Pod) DeploymentCheck {
 	status := StatusMatch
 	observations := make([]Observation, 0)
+	findings := make([]Finding, 0)
 	limit := make([]string, 0)
 	graph := make([]EvidenceEdge, 0)
 
@@ -37,8 +49,11 @@ func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) Deployme
 		desiredImages = append(desiredImages, "<none>")
 	}
 
-	_ = strings.Join(desiredImages, ", ")
+	desiredText := strings.Join(desiredImages, ", ")
 	graph = append(graph, EvidenceEdge{From: fmt.Sprintf("deployment/%s", deployment.Name), To: fmt.Sprintf("replicaset/%s", deployment.Name), Type: "declares"})
+	for _, rs := range replicaSets {
+		graph = append(graph, EvidenceEdge{From: fmt.Sprintf("deployment/%s", deployment.Name), To: fmt.Sprintf("replicaset/%s", rs.Name), Type: "owns", Evidence: []Observation{{Kind: "replicaset", Subject: rs.Name, Value: rs.Annotations["deployment.kubernetes.io/revision"], Expected: desiredText, Source: "ReplicaSet.metadata.annotations", Method: "kubernetes-api", Status: StatusMatch}}})
+	}
 
 	observedByPod := map[string]map[string]string{}
 	for _, pod := range pods {
@@ -48,7 +63,7 @@ func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) Deployme
 			observedByPod[podKey][cs.Name] = cs.ImageID
 		}
 		if len(pod.Status.ContainerStatuses) == 0 {
-			observedByPod[podKey]["container"] = "<no runtime image status>"
+			observedByPod[podKey]["container"] = ""
 		}
 	}
 
@@ -64,20 +79,24 @@ func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) Deployme
 			continue
 		}
 		for containerName, imageID := range podMap {
+			containerStatus := findContainerStatus(&pod, containerName)
 			obs := Observation{
-				Kind:      "container",
-				Subject:   podName + "/" + containerName,
-				Value:     imageID,
-				Source:    "PodStatus.containerStatuses[].imageID",
-				Timestamp: time.Now(),
-				Method:    "kubernetes-api",
-				Status:    StatusMatch,
+				Kind: "container", Subject: podName + "/" + containerName, Value: imageID,
+				Expected: desiredText, Source: "PodStatus.containerStatuses[].imageID", Timestamp: time.Now(), Method: "kubernetes-api", Status: StatusMatch,
+			}
+			if containerStatus != nil {
+				obs.ObservedImage = containerStatus.Image
+				obs.Ready = containerStatus.Ready
+				obs.RestartCount = containerStatus.RestartCount
+				obs.State = containerState(containerStatus)
 			}
 			if imageID == "" {
 				obs.Status = StatusUnknown
 				obs.Limitations = []string{"runtime identity not reported by the Kubernetes API"}
 				status = StatusUnknown
 				divergent++
+				findings = append(findings, Finding{Code: "runtime-identity-unavailable", Status: StatusUnknown, Subject: obs.Subject, Message: "Kubernetes did not report a runtime image identity", Evidence: []Observation{obs}})
+				observations = append(observations, obs)
 				continue
 			}
 			if !isDesiredMatch(desiredImages, imageID) {
@@ -85,6 +104,7 @@ func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) Deployme
 				status = StatusPartial
 				divergent++
 				obs.Limitations = []string{"Deployment image and runtime imageID differ"}
+				findings = append(findings, Finding{Code: "runtime-image-divergence", Status: StatusMismatch, Subject: obs.Subject, Message: "runtime image identity differs from the declared image repository", Evidence: []Observation{obs}})
 			} else {
 				matching++
 			}
@@ -96,10 +116,49 @@ func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) Deployme
 		status = StatusUnknown
 		limit = append(limit, "no pods were found for this deployment")
 	}
+	desiredReplicas := 1
+	if deployment.Spec.Replicas != nil {
+		desiredReplicas = int(*deployment.Spec.Replicas)
+	}
+	summary := ReplicaSummary{Desired: desiredReplicas, Observed: total, Matching: matching, Divergent: divergent}
+	replicaObservation := Observation{Kind: "deployment", Subject: deployment.Name, Expected: fmt.Sprintf("%d replicas", desiredReplicas), Value: fmt.Sprintf("%d Pods", total), Source: "Deployment.spec.replicas and namespace Pod list", Timestamp: time.Now(), Method: "kubernetes-api", Status: StatusMatch}
+	if total < desiredReplicas {
+		findings = append(findings, Finding{Code: "replica-count-drift", Status: StatusPartial, Subject: deployment.Name, Message: fmt.Sprintf("expected %d replicas but observed %d Pods", desiredReplicas, total), Evidence: []Observation{replicaObservation}})
+		status = StatusPartial
+	}
+	if total > desiredReplicas {
+		findings = append(findings, Finding{Code: "extra-replicas", Status: StatusPartial, Subject: deployment.Name, Message: fmt.Sprintf("expected %d replicas but observed %d Pods", desiredReplicas, total), Evidence: []Observation{replicaObservation}})
+		status = StatusPartial
+	}
+	for _, observation := range observations {
+		if observation.Status == StatusUnknown {
+			summary.Unknown++
+		}
+	}
+	for _, pod := range pods {
+		graph = append(graph, EvidenceEdge{From: fmt.Sprintf("replicaset/%s", ownerReplicaSetName(&pod)), To: fmt.Sprintf("pod/%s", pod.Name), Type: "owns"})
+	}
+	for _, rs := range replicaSets {
+		for _, pod := range pods {
+			if ownerReplicaSetName(&pod) == rs.Name {
+				graph = append(graph, EvidenceEdge{From: fmt.Sprintf("pod/%s", pod.Name), To: fmt.Sprintf("container/%s", pod.Name), Type: "contains"})
+			}
+		}
+	}
+	deploymentRevision := deployment.Annotations["deployment.kubernetes.io/revision"]
+	if deploymentRevision != "" {
+		for _, rs := range replicaSets {
+			if rs.Annotations["deployment.kubernetes.io/revision"] != "" && rs.Annotations["deployment.kubernetes.io/revision"] != deploymentRevision {
+				revisionObservation := Observation{Kind: "replicaset", Subject: rs.Name, Expected: deploymentRevision, Value: rs.Annotations["deployment.kubernetes.io/revision"], Source: "Deployment and ReplicaSet revision annotations", Timestamp: time.Now(), Method: "kubernetes-api", Status: StatusMismatch}
+				findings = append(findings, Finding{Code: "stale-replicaset", Status: StatusStale, Subject: rs.Name, Message: "ReplicaSet revision differs from the Deployment revision annotation", Evidence: []Observation{revisionObservation}})
+				status = StatusPartial
+			}
+		}
+	}
 	if divergent > 0 && matching > 0 {
 		status = StatusPartial
 	}
-	if divergent == 0 && total > 0 {
+	if divergent == 0 && total > 0 && total == desiredReplicas && len(findings) == 0 {
 		status = StatusMatch
 	}
 	if status == StatusMatch {
@@ -120,13 +179,47 @@ func VerifyDeployment(deployment *appsv1.Deployment, pods []corev1.Pod) Deployme
 		graph = append(graph, EvidenceEdge{From: "deployment", To: "runtime-identity", Type: "observed", Evidence: observations})
 	}
 	return DeploymentCheck{
-		Deployment: deployment,
-		Pods:       pods,
-		Status:     status,
-		Evidence:   observations,
+		Deployment:  deployment,
+		Pods:        pods,
+		ReplicaSets: replicaSets,
+		Status:      status,
+		Evidence:    observations,
+		Findings:    findings,
+		Summary:     summary,
 		Limitations: limit,
-		Graph:      graph,
+		Graph:       graph,
 	}
+}
+
+func findContainerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {
+	for i := range pod.Status.ContainerStatuses {
+		if pod.Status.ContainerStatuses[i].Name == name {
+			return &pod.Status.ContainerStatuses[i]
+		}
+	}
+	return nil
+}
+
+func containerState(status *corev1.ContainerStatus) string {
+	if status.State.Running != nil {
+		return "running"
+	}
+	if status.State.Waiting != nil {
+		return "waiting"
+	}
+	if status.State.Terminated != nil {
+		return "terminated"
+	}
+	return "unknown"
+}
+
+func ownerReplicaSetName(pod *corev1.Pod) string {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == "ReplicaSet" {
+			return owner.Name
+		}
+	}
+	return "unknown"
 }
 
 func isDesiredMatch(desired []string, imageID string) bool {
@@ -157,6 +250,15 @@ func isDesiredMatch(desired []string, imageID string) bool {
 
 func BuildDeploymentResult(deployment *appsv1.Deployment, pods []corev1.Pod) VerificationResult {
 	check := VerifyDeployment(deployment, pods)
+	return buildDeploymentResult(check, deployment)
+}
+
+func BuildDeploymentResultWithReplicaSets(deployment *appsv1.Deployment, replicaSets []appsv1.ReplicaSet, pods []corev1.Pod) VerificationResult {
+	check := VerifyDeploymentWithReplicaSets(deployment, replicaSets, pods)
+	return buildDeploymentResult(check, deployment)
+}
+
+func buildDeploymentResult(check DeploymentCheck, deployment *appsv1.Deployment) VerificationResult {
 	res := VerificationResult{
 		Claim:         "deployment runtime identity matches declared workload",
 		Subject:       fmt.Sprintf("deployment/%s/%s", deployment.Namespace, deployment.Name),
@@ -167,6 +269,8 @@ func BuildDeploymentResult(deployment *appsv1.Deployment, pods []corev1.Pod) Ver
 		Method:        "read-only",
 		Limitations:   check.Limitations,
 		Observations:  check.Evidence,
+		Findings:      check.Findings,
+		Summary:       check.Summary,
 		EvidenceChain: check.Graph,
 	}
 	if len(deployment.Spec.Template.Spec.Containers) > 0 {
@@ -203,16 +307,19 @@ func BuildScanSummary(deployments []appsv1.Deployment, results map[string]Verifi
 		return "No workloads found."
 	}
 	out := make([]string, 0, len(deployments))
+	counts := map[Status]int{}
 	for _, dep := range deployments {
 		res, ok := results[dep.Name]
 		if !ok {
 			out = append(out, fmt.Sprintf("%s\tUNKNOWN", dep.Name))
+			counts[StatusUnknown]++
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s\t%s", dep.Name, res.Status))
+		counts[res.Status]++
 	}
 	sort.Strings(out)
-	return strings.Join(out, "\n")
+	return fmt.Sprintf("%d workloads inspected\n\nMATCH\t%d\nPARTIAL\t%d\nUNKNOWN\t%d\n\n%s", len(deployments), counts[StatusMatch], counts[StatusPartial], counts[StatusUnknown], strings.Join(out, "\n"))
 }
 
 func DescribeWorkloadReference(secretName string, workloadName string) string {

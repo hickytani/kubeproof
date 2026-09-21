@@ -37,7 +37,11 @@ var explainCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		res := truth.BuildDeploymentResult(dep, pods)
+		replicaSets, err := k8s.GetReplicaSetsForDeployment(client, namespace, dep)
+		if err != nil {
+			return err
+		}
+		res := truth.BuildDeploymentResultWithReplicaSets(dep, replicaSets, pods)
 		fmt.Println(output.BuildExplainText(res))
 		return nil
 	},

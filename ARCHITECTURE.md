@@ -105,7 +105,9 @@ ReplicaSet revisions are not independently compared or validated. A ReplicaSet t
 - missing runtime identity becomes UNKNOWN evidence
 - divergent replicas produce mismatch observations and can make the result PARTIAL
 
-The verifier does not compare `ContainerStatus.Image` separately, inspect application processes, validate rollout revision consistency, or infer Secret/ConfigMap consumption.
+Each container observation can also carry the API-reported container image, state, readiness, and restart count. These fields are retained as observations; `image` and `imageID` are not treated as equivalent values.
+
+The verifier does not use `ContainerStatus.Image` as a digest comparison, inspect application processes, or infer Secret/ConfigMap consumption. When Deployment and ReplicaSet revision annotations are present, it can emit a stale-ReplicaSet finding when they differ; it is not a full rollout controller-state analysis.
 
 ## Evidence result
 
@@ -115,6 +117,7 @@ The result contains:
 - the first declared container image
 - the computed status
 - observed container image ID observations
+- replica summary counts and structured findings
 - source and method fields
 - limitations
 - evidence edges connecting the Deployment to runtime identity
