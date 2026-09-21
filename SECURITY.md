@@ -1,29 +1,49 @@
-# Security
+# Security and trust boundary
 
-## Read-only model
+## Read-only behavior
 
-The CLI is read-only. It reads Deployments, ReplicaSets, Pods, and workload-type metadata through the Kubernetes API. It uses the current kubeconfig context by default and supports an explicit `--context`.
+StateProof is an inspection tool. Its production Kubernetes client performs read operations only:
+
+- `get`
+- `list`
+- `watch` permissions are supplied by the recommended RBAC manifest, although the current client path uses `get` and `list`
+
+The CLI does not call Kubernetes create, update, patch, delete, replace, or restart operations. It does not use `pods/exec`, attach, or port-forward endpoints.
+
+There is no automatic remediation. StateProof reports the evidence it can obtain and leaves workloads unchanged.
+
+## Least privilege
+
+[`deploy/rbac-readonly.yaml`](deploy/rbac-readonly.yaml) grants:
+
+- core API `get`, `list`, and `watch` on `pods`
+- Apps API `get`, `list`, and `watch` on `deployments`, `replicasets`, `daemonsets`, and `statefulsets`
+
+The manifest uses a ServiceAccount, ClusterRole, and ClusterRoleBinding for an example read-only identity. It does not grant cluster-admin and does not grant access to Secrets or ConfigMaps.
+
+The actual caller may instead use a normal user kubeconfig identity or in-cluster configuration. The required permissions remain read-only access to the resources used by the selected command.
 
 ## Secret handling
 
-This project does not request Secret objects or read Secret values. It does not expose secret bytes or data entries.
+StateProof does not request Secret objects, read Secret `data`, or expose Secret values. It cannot determine whether an application consumed a Secret or ConfigMap value.
 
-## Required RBAC
+## Authentication and kubeconfig
 
-The recommended policy in `deploy/rbac-readonly.yaml` grants only `get`, `list`, and `watch` on Pods and the Apps API's Deployments, ReplicaSets, DaemonSets, and StatefulSets. It does not require cluster-admin.
+The CLI uses the normal Kubernetes client configuration. Outside a cluster it loads the standard kubeconfig or the path supplied by `KUBECONFIG`; `--context` selects a named context. Inside a cluster it uses in-cluster configuration when the Kubernetes service environment is present.
 
-## Prohibited actions
+Kubeconfig files and credentials belong to the operator environment and must not be committed to this repository.
 
-The project and deployment manifests intentionally avoid permissions for:
+## Evidence trust boundary
 
-- create
-- update
-- patch
-- delete
-- pods/exec
-- pods/attach
-- replace
-- restart
-- port-forward
+StateProof can connect declared Deployment images, ReplicaSet ownership, Pod ownership, and reported container `imageID` values. That is evidence about Kubernetes object state and runtime identity as reported by the API.
 
-StateProof performs no automatic remediation. Kubernetes API evidence cannot prove application memory state, effective in-memory configuration, Secret consumption, arbitrary process memory, or semantic application behavior; those boundaries are reported as UNKNOWN or UNOBSERVABLE.
+It does not prove:
+
+- application memory or arbitrary process memory
+- effective in-memory configuration
+- Secret or ConfigMap consumption
+- semantic application behavior
+- rollout revision consistency
+- that a container is healthy beyond the evidence exposed by the objects read
+
+Those questions require other evidence or instrumentation and remain UNKNOWN or UNOBSERVABLE in this model.
