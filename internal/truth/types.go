@@ -121,6 +121,7 @@ type EvidenceEdge struct {
 }
 
 type VerificationResult struct {
+	SchemaVersion int                   `json:"schemaVersion"`
 	Claim         string                `json:"claim"`
 	Subject       string                `json:"subject"`
 	Desired       string                `json:"desired"`

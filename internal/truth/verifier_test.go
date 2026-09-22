@@ -25,6 +25,22 @@ func TestEvidenceAndFindingsAreDeterministicAcrossAPIOrdering(t *testing.T) {
 	first := BuildDeploymentResultWithReplicaSets(dep, sets, []corev1.Pod{b, a})
 	second := BuildDeploymentResultWithReplicaSets(dep, []appsv1.ReplicaSet{sets[1], sets[0]}, []corev1.Pod{a, b})
 	first.Timestamp, second.Timestamp = first.Timestamp.UTC(), first.Timestamp.UTC()
+	for i := range first.Observations {
+		first.Observations[i].Timestamp = first.Timestamp
+	}
+	for i := range second.Observations {
+		second.Observations[i].Timestamp = second.Timestamp
+	}
+	for i := range first.EvidenceChain {
+		for j := range first.EvidenceChain[i].Evidence {
+			first.EvidenceChain[i].Evidence[j].Timestamp = first.Timestamp
+		}
+	}
+	for i := range second.EvidenceChain {
+		for j := range second.EvidenceChain[i].Evidence {
+			second.EvidenceChain[i].Evidence[j].Timestamp = second.Timestamp
+		}
+	}
 	firstJSON, _ := json.Marshal(first)
 	secondJSON, _ := json.Marshal(second)
 	if string(firstJSON) != string(secondJSON) {

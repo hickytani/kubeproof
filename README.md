@@ -229,6 +229,21 @@ The tagged suite creates a temporary namespace, captures the runtime digest repo
 
 Exit codes are `0` for match, `2` for verified drift or incomplete current revision, `3` for insufficient immutable evidence, and `1` for an operational error.
 
+### Offline evidence comparison
+
+Save JSON evidence at two observation times, then compare it without a cluster,
+kubeconfig, or network connection:
+
+```powershell
+.\stateproof.exe evidence deployment payments -n production --json > before.json
+.\stateproof.exe evidence deployment payments -n production --json > after.json
+.\stateproof.exe compare before.json after.json --json
+```
+
+Snapshots use `schemaVersion: 1`. `compare` returns `0` for `NO_CHANGE`, `2`
+for `CHANGED`, and `1` for malformed, unsupported, or unrelated snapshots.
+It compares Kubernetes evidence, not application behavior or runtime history.
+
 The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes E2E has not been run in the current development environment because no usable Kubernetes context or API is available.
 
 ## Limitations

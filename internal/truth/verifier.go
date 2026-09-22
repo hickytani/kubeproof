@@ -226,7 +226,7 @@ func buildDeploymentResult(check DeploymentCheck, deployment *appsv1.Deployment)
 		return check.Findings[i].Subject < check.Findings[j].Subject
 	})
 	sort.Slice(check.Evidence, func(i, j int) bool { return check.Evidence[i].Subject < check.Evidence[j].Subject })
-	res := VerificationResult{Claim: "current ready Deployment Pods run declared digest-pinned runtime identities", Subject: objectID("Deployment", deployment.Namespace, deployment.Name), Status: check.Status, Source: "Kubernetes API", Timestamp: time.Now(), Method: "read-only", Limitations: check.Limitations, Observations: check.Evidence, Findings: check.Findings, Summary: check.Summary, Configuration: check.Configuration, Evidence: normalizedEvidence(deployment, check), EvidenceChain: check.Graph}
+	res := VerificationResult{SchemaVersion: 1, Claim: "current ready Deployment Pods run declared digest-pinned runtime identities", Subject: objectID("Deployment", deployment.Namespace, deployment.Name), Status: check.Status, Source: "Kubernetes API", Timestamp: time.Now(), Method: "read-only", Limitations: check.Limitations, Observations: check.Evidence, Findings: check.Findings, Summary: check.Summary, Configuration: check.Configuration, Evidence: normalizedEvidence(deployment, check), EvidenceChain: check.Graph}
 	if len(deployment.Spec.Template.Spec.Containers) > 0 {
 		res.Desired = deployment.Spec.Template.Spec.Containers[0].Image
 	} else {
