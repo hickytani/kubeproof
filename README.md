@@ -206,6 +206,14 @@ go vet ./...
 go build ./...
 ```
 
+Real-cluster E2E is deliberately separate and requires an explicit kubeconfig:
+
+```powershell
+go test -tags=e2e -p 1 ./e2e -v
+```
+
+The tagged suite creates a temporary namespace, captures the runtime digest reported by a real kubelet, then runs the production CLI for digest-match, digest-mismatch, container-swap, init-container, and tag-only insufficient-evidence scenarios. It never runs as part of `go test ./...`.
+
 Exit codes are `0` for match, `2` for verified drift or incomplete current revision, `3` for insufficient immutable evidence, and `1` for an operational error.
 
 The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes E2E has not been run in the current development environment because no usable Kubernetes context or API is available.

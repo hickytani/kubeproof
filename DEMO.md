@@ -2,6 +2,8 @@
 
 This is a demonstration procedure. It was not executed against a live Kubernetes cluster in the current development environment.
 
+## Option A: existing kubeconfig-backed cluster
+
 The procedure uses an existing kubeconfig-backed cluster and should inspect a safe test or demo workload. Do not mutate an existing production workload.
 
 ## 1. Prerequisites
@@ -106,3 +108,13 @@ kubectl rollout status deployment/<demo-name> -n <namespace> --timeout=180s
 - `UNKNOWN` means immutable runtime evidence is insufficient, including tag-only declarations.
 
 The result does not prove application memory, configuration consumption, Secret use, process behavior, or semantic application health.
+
+## Option B: disposable real E2E suite
+
+The repository contains a build-tagged real Kubernetes suite. It is intentionally excluded from ordinary Go tests and creates all fixtures in a temporary namespace:
+
+```powershell
+go test -tags=e2e -p 1 ./e2e -v
+```
+
+It requires `KUBECONFIG` to point to a cluster where the test identity can create and delete a namespace. The test captures each Pod's reported `imageID`, pins the paused Deployment to that observed digest, and invokes the production CLI. This demonstrates the actual `Deployment -> ReplicaSet -> Pod -> container -> imageID` path, plus tag-only insufficient evidence, digest drift, container-name swaps, and init-container evidence. The GitHub Actions `kubernetes-e2e` workflow provisions kind separately from ordinary CI.

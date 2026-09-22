@@ -1,7 +1,7 @@
-*.exe
-*.test
-*.out
+stateproof
+stateproof.exe
+k8s-truth
+k8s-truth.exe
+coverage.out
 .env
-.env.*
 kubeconfig
-*.kubeconfig
