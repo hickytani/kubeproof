@@ -256,6 +256,8 @@ named current-ready container. This is read-only and does not contact a registry
 Repeat `--expected-digest` for each normal container to gate. Exit `0` means all
 observed current-ready replicas matched; `2` means drift or incomplete rollout;
 `3` means immutable evidence was insufficient; `1` means an API/operational error.
+The kind-backed E2E suite covers expected-digest success, valid-digest mismatch,
+multi-container name matching, and RBAC denial; normal tests remain cluster-free.
 
 The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes E2E has not been run in the current development environment because no usable Kubernetes context or API is available.
 

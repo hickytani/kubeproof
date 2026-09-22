@@ -137,6 +137,40 @@ func TestStateProofAgainstRealKubernetesAPI(t *testing.T) {
 			t.Fatalf("expected actionable ReplicaSet authorization error, got %s", output)
 		}
 	})
+
+	t.Run("expected-digest-gate", func(t *testing.T) {
+		dep := createDeployment(t, client, ns.Name, "gate", []corev1.Container{{Name: "api", Image: "registry.k8s.io/pause:3.10"}}, nil)
+		waitAvailable(t, client, ns.Name, dep.Name)
+		digest := digestOf(podRuntimeImage(t, client, ns.Name, dep.Name, "api"))
+		output := runCLI(t, binary, 0, "verify", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--expected-digest", "api="+digest, "--json")
+		if !strings.Contains(string(output), "EXPECTED_DIGEST_MATCH") {
+			t.Fatalf("expected gate reason in %s", output)
+		}
+		wrong := replaceDigest(digest)
+		output = runCLI(t, binary, 2, "verify", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--expected-digest", "api="+wrong, "--json")
+		if !strings.Contains(string(output), "EXPECTED_DIGEST_MISMATCH") {
+			t.Fatalf("expected mismatch reason in %s", output)
+		}
+	})
+
+	t.Run("expected-digest-gate-multi-container-name-matching", func(t *testing.T) {
+		dep := createDeployment(t, client, ns.Name, "gate-multi", []corev1.Container{{Name: "api", Image: "registry.k8s.io/pause:3.10"}, {Name: "worker", Image: "registry.k8s.io/pause:3.9"}}, nil)
+		waitAvailable(t, client, ns.Name, dep.Name)
+		api := digestOf(podRuntimeImage(t, client, ns.Name, dep.Name, "api"))
+		worker := digestOf(podRuntimeImage(t, client, ns.Name, dep.Name, "worker"))
+		runCLI(t, binary, 0, "verify", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--expected-digest", "api="+api, "--expected-digest", "worker="+worker)
+		output := runCLI(t, binary, 2, "verify", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--expected-digest", "api="+worker, "--expected-digest", "worker="+api, "--json")
+		if strings.Count(string(output), "EXPECTED_DIGEST_MISMATCH") < 2 {
+			t.Fatalf("both named containers must fail: %s", output)
+		}
+	})
+
+	t.Run("expected-digest-gate-rbac-denial", func(t *testing.T) {
+		dep := createDeployment(t, client, ns.Name, "gate-rbac", []corev1.Container{{Name: "api", Image: "registry.k8s.io/pause:3.10"}}, nil)
+		waitAvailable(t, client, ns.Name, dep.Name)
+		kubeconfig := restrictedKubeconfig(t, client, config, ns.Name)
+		runCLIWithEnv(t, binary, 1, []string{"KUBECONFIG=" + kubeconfig}, "verify", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--expected-digest", "api=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	})
 }
 
 func buildBinary(t *testing.T) string {
@@ -289,6 +323,12 @@ func runtimeReference(id string) string {
 		return id[i+3:]
 	}
 	return id
+}
+func digestOf(reference string) string {
+	if i := strings.LastIndex(reference, "@"); i >= 0 {
+		return reference[i+1:]
+	}
+	return ""
 }
 func replaceDigest(image string) string {
 	if len(image) == 0 {
