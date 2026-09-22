@@ -37,6 +37,9 @@ func init() {
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(explainCmd)
 	rootCmd.AddCommand(evidenceCmd)
+	rootCmd.AddCommand(keygenCmd)
+	rootCmd.AddCommand(attestCmd)
+	rootCmd.AddCommand(verifyAttestationCmd)
 }
 
 func Execute() {

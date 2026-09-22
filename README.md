@@ -259,6 +259,23 @@ observed current-ready replicas matched; `2` means drift or incomplete rollout;
 The kind-backed E2E suite covers expected-digest success, valid-digest mismatch,
 multi-container name matching, and RBAC denial; normal tests remain cluster-free.
 
+### Cryptographically verifiable attestations
+
+Generate an Ed25519 key pair, turn a successful runtime verification into a signed portable attestation artifact, and verify it offline without Kubernetes cluster access:
+
+```powershell
+# 1. Generate an Ed25519 signing key pair
+.\stateproof.exe keygen --output production.key
+
+# 2. Attest a matching workload (requires --signing-key and --output; fails if verification is not MATCH)
+.\stateproof.exe attest workload deployment/payments -n production --signing-key production.key --output payments.attestation.json --expected-digest api=$env:IMAGE_DIGEST
+
+# 3. Verify the signed attestation offline (no Kubernetes cluster access or credentials required)
+.\stateproof.exe verify-attestation payments.attestation.json --public-key production.key.pub
+```
+
+Attestations use `schema_version: "1.0"`. `verify-attestation` checks cryptographic signature authenticity using Ed25519, schema version compatibility, runtime payload determinism, non-empty workload identity, evidence completeness, replica matching, container status consistency, and timestamp sanity. Exit code `0` indicates a valid attestation; `2` indicates signature corruption, tampered payload, or invalid evidence.
+
 The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes E2E has not been run in the current development environment because no usable Kubernetes context or API is available.
 
 ## Limitations

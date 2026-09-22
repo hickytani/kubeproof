@@ -171,6 +171,48 @@ func TestStateProofAgainstRealKubernetesAPI(t *testing.T) {
 		kubeconfig := restrictedKubeconfig(t, client, config, ns.Name)
 		runCLIWithEnv(t, binary, 1, []string{"KUBECONFIG=" + kubeconfig}, "verify", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--expected-digest", "api=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	})
+
+	t.Run("attestation-lifecycle", func(t *testing.T) {
+		dep := createDeployment(t, client, ns.Name, "attest-dep", []corev1.Container{{Name: "api", Image: "registry.k8s.io/pause:3.10"}}, nil)
+		waitAvailable(t, client, ns.Name, dep.Name)
+		pinFromRuntime(t, client, ns.Name, dep.Name, false)
+
+		tempDir := t.TempDir()
+		keyPath := filepath.Join(tempDir, "signing.key")
+		pubPath := filepath.Join(tempDir, "signing.key.pub")
+		attestationPath := filepath.Join(tempDir, "attestation.json")
+
+		// 1. Keygen
+		runCLI(t, binary, 0, "keygen", "--output", keyPath)
+
+		// 2. Attest successful match
+		digest := digestOf(podRuntimeImage(t, client, ns.Name, dep.Name, "api"))
+		runCLI(t, binary, 0, "attest", "workload", "deployment/"+dep.Name, "-n", ns.Name, "--signing-key", keyPath, "--output", attestationPath, "--expected-digest", "api="+digest)
+
+		// 3. Offline verify attestation
+		output := runCLI(t, binary, 0, "verify-attestation", attestationPath, "--public-key", pubPath, "--json")
+		if !strings.Contains(string(output), `"valid": true`) {
+			t.Fatalf("expected valid attestation verification report, got: %s", output)
+		}
+
+		// 4. Verify tampered attestation fails
+		data, err := os.ReadFile(attestationPath)
+		if err != nil {
+			t.Fatalf("read attestation: %v", err)
+		}
+		tamperedData := strings.Replace(string(data), `"deployment_name": "attest-dep"`, `"deployment_name": "tampered-dep"`, 1)
+		tamperedPath := filepath.Join(tempDir, "tampered.json")
+		if err := os.WriteFile(tamperedPath, []byte(tamperedData), 0644); err != nil {
+			t.Fatalf("write tampered attestation: %v", err)
+		}
+		runCLI(t, binary, 2, "verify-attestation", tamperedPath, "--public-key", pubPath)
+
+		// 5. Attest on mismatching deployment is refused
+		depMismatched := createDeployment(t, client, ns.Name, "attest-mismatch", []corev1.Container{{Name: "api", Image: "registry.k8s.io/pause:3.10"}}, nil)
+		waitAvailable(t, client, ns.Name, depMismatched.Name)
+		// Not pinned to runtime image ID -> mismatch
+		runCLI(t, binary, 2, "attest", "workload", "deployment/"+depMismatched.Name, "-n", ns.Name, "--signing-key", keyPath, "--output", filepath.Join(tempDir, "should-not-exist.json"))
+	})
 }
 
 func buildBinary(t *testing.T) string {
