@@ -71,9 +71,9 @@ Pod discovery follows Kubernetes owner references rather than assuming names or 
 
 1. Read the target Deployment.
 2. List Pods in its namespace.
-3. For each Pod whose owner is a ReplicaSet, read that ReplicaSet.
-4. Inspect the ReplicaSet owner references.
-5. Keep the Pod when the ReplicaSet is owned by the target Deployment.
+3. List ReplicaSets once, map those owned by the Deployment, and join Pods in memory.
+4. Select the current ReplicaSet from matching Deployment/ReplicaSet revision annotations.
+5. Verify only ready, non-terminating Pods owned by that current ReplicaSet.
 
 This gives the runtime path:
 
@@ -99,9 +99,9 @@ ReplicaSet revisions are not independently compared or validated. A ReplicaSet t
 
 `internal/truth` gathers declared image references from Deployment regular and init containers. It gathers observed image IDs from `PodStatus.ContainerStatuses` and compares them with `isDesiredMatch`:
 
-- exact or containing image-reference matches are accepted
-- digest-pinned declarations match when the declared digest appears in the runtime ID
-- tagged declarations match when the runtime ID contains the same repository and a digest marker
+- normal and init containers are joined to their status by container name
+- digest-pinned declarations match only when the exact declared digest appears in the runtime ID
+- tag-only declarations remain `UNKNOWN`; resolving a tag requires registry evidence
 - missing runtime identity becomes UNKNOWN evidence
 - divergent replicas produce mismatch observations and can make the result PARTIAL
 

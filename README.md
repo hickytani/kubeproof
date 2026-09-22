@@ -1,10 +1,10 @@
 # StateProof
 
-## Kubernetes runtime truth, backed by evidence.
+## Deployment runtime-image evidence, backed by Kubernetes API observations.
 
 StateProof is a read-only Kubernetes runtime truth verifier for one practical question:
 
-> What did we declare, what is actually running, and what can Kubernetes prove?
+> Are the current ready Pods of this Deployment running the exact digest declared for each container?
 
 Kubernetes spreads that answer across several objects. StateProof connects the objects into an evidence chain instead of presenting generic monitoring metrics:
 
@@ -37,7 +37,7 @@ StateProof currently verifies Deployment runtime identity from the Kubernetes AP
 - stale ReplicaSet revision evidence when revision annotations are available
 - an evidence result in human-readable or JSON form
 
-The verifier uses the Pod's `status.containerStatuses[].imageID` as runtime identity. For a tagged declaration such as `nginx:1.25`, an image ID containing the same repository and a digest is treated as a repository-level match. A digest-pinned declaration can also match when its digest appears in the runtime image ID.
+The verifier uses `status.containerStatuses[].imageID` and `status.initContainerStatuses[].imageID` as runtime identity. A digest-pinned declaration can be matched to that exact digest. A tag-only declaration is `UNKNOWN`: Kubernetes API evidence cannot prove which immutable artifact a movable tag resolves to without registry evidence.
 
 ## Declared / observed / proven
 
@@ -74,9 +74,10 @@ Deployment-to-Pod discovery is implemented as follows:
 
 1. Read the named Deployment.
 2. List Pods in the namespace.
-3. For each Pod owned by a ReplicaSet, read that ReplicaSet.
-4. Keep the Pod when the ReplicaSet is owned by the named Deployment.
-5. Compare each discovered container's `imageID` with the Deployment's declared image references.
+3. List ReplicaSets once and map Deployment-owned ReplicaSets locally.
+4. Identify the current ReplicaSet from Deployment revision metadata.
+5. Verify only current-revision, Ready, non-terminating Pods.
+6. Compare every declared container to the status with the same container name.
 
 When Deployment and ReplicaSet revision annotations are available, StateProof reports a stale-ReplicaSet finding when they differ. This is annotation comparison, not a full rollout controller-state analysis.
 
@@ -84,9 +85,9 @@ When Deployment and ReplicaSet revision annotations are available, StateProof re
 
 Within that boundary, StateProof can produce:
 
-- `MATCH` when all observed runtime identities match the declared repository identity
-- `PARTIAL` when observed replicas include a mismatch or mixed evidence
-- `UNKNOWN` when no Pods or usable runtime identity are available
+- `MATCH` when all current ready Pods report every declared digest-pinned identity
+- `PARTIAL` when immutable evidence proves divergence or the current revision is incomplete
+- `UNKNOWN` when immutable evidence is unavailable, including tag-only declarations
 - the declared image, observed image IDs, source fields, timestamps, limitations, and evidence edges
 - explicit limitations about application-level behavior and runtime process internals
 - replica summary counts and structured findings for runtime divergence, missing replicas, and stale revisions
@@ -137,7 +138,6 @@ StateProof reads existing objects and does not create infrastructure or mutate w
 
 ```powershell
 .\stateproof.exe verify deployment <name> --namespace <namespace>
-.\stateproof.exe verify workload <name> --namespace <namespace>
 .\stateproof.exe scan <namespace>
 .\stateproof.exe explain deployment <name> --namespace <namespace>
 .\stateproof.exe evidence deployment <name> --namespace <namespace> --json
@@ -146,7 +146,7 @@ StateProof reads existing objects and does not create infrastructure or mutate w
 ### Commands
 
 - `verify deployment` reads a Deployment, follows ReplicaSet ownership to Pods, and reports runtime identity evidence.
-- `verify workload` checks whether the named object is a Deployment, StatefulSet, or DaemonSet, then prints its type. It does not run full verification for non-Deployment workloads.
+- `verify workload` is intentionally unsupported: StateProof currently verifies Deployments only.
 - `scan` lists Deployment results for a namespace using the same read-only verification path.
 - `explain deployment` renders the computed result, observations, and limitations as explanatory text.
 - `evidence deployment --json` emits the computed result as structured JSON. Without `--json`, it prints the human-readable result.
@@ -162,8 +162,8 @@ $ stateproof verify deployment api -n production
 TRUTH
 Subject: deployment/production/api
 Status: MATCH
-Desired: api:<tag>
-Observed: all observed pod imageIDs matched declared image identity
+Desired: registry.example/api@sha256:<digest>
+Observed: all current ready Pod container identities matched digest-pinned declarations
 Source: Kubernetes API
 ```
 
@@ -206,12 +206,14 @@ go vet ./...
 go build ./...
 ```
 
+Exit codes are `0` for match, `2` for verified drift or incomplete current revision, `3` for insufficient immutable evidence, and `1` for an operational error.
+
 The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes E2E has not been run in the current development environment because no usable Kubernetes context or API is available.
 
 ## Limitations
 
-- Runtime identity is compared at repository/digest evidence level, not by claiming that a tag itself is immutable.
-- ReplicaSet ownership lookup ignores ReplicaSets that cannot be read, so missing permissions can reduce observed evidence.
+- Tag-only images are insufficient immutable identity evidence; pin images by digest for `MATCH`.
+- ReplicaSet list failures are operational errors, not silently downgraded to absent evidence.
 - The verifier does not inspect application processes, memory, logs, or network behavior.
 - The current CLI's full verification path is Deployment-specific.
 - A real cluster is required for end-to-end validation against live Kubernetes objects.

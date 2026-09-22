@@ -63,6 +63,14 @@ func GetReplicaSetsForDeployment(client kubernetes.Interface, namespace string, 
 }
 
 func GetDeploymentPods(client kubernetes.Interface, namespace string, deployment *appsv1.Deployment) ([]corev1.Pod, error) {
+	replicaSets, err := GetReplicaSetsForDeployment(client, namespace, deployment)
+	if err != nil {
+		return nil, fmt.Errorf("list Deployment ReplicaSets: %w", err)
+	}
+	ownedReplicaSets := make(map[string]struct{}, len(replicaSets))
+	for _, rs := range replicaSets {
+		ownedReplicaSets[rs.Name] = struct{}{}
+	}
 	list, err := client.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return nil, err
@@ -71,13 +79,9 @@ func GetDeploymentPods(client kubernetes.Interface, namespace string, deployment
 	for _, pod := range list.Items {
 		for _, owner := range pod.OwnerReferences {
 			if owner.Kind == "ReplicaSet" {
-				if controllerRS, err := client.AppsV1().ReplicaSets(namespace).Get(context.Background(), owner.Name, metav1.GetOptions{}); err == nil {
-					for _, rsOwner := range controllerRS.OwnerReferences {
-						if rsOwner.Kind == "Deployment" && rsOwner.Name == deployment.Name {
-							matches = append(matches, pod)
-							break
-						}
-					}
+				if _, ok := ownedReplicaSets[owner.Name]; ok {
+					matches = append(matches, pod)
+					break
 				}
 			}
 		}

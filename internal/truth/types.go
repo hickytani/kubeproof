@@ -48,6 +48,22 @@ type ReplicaSummary struct {
 	Unknown   int `json:"unknown"`
 }
 
+type ConfigurationReference struct {
+	Pod           string `json:"pod,omitempty"`
+	Container     string `json:"container,omitempty"`
+	Location      string `json:"location"`
+	ReferenceType string `json:"reference_type"`
+	Kind          string `json:"kind"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+}
+
+type ConfigurationEvidence struct {
+	Declared    []ConfigurationReference `json:"declared,omitempty"`
+	Observed    []ConfigurationReference `json:"observed,omitempty"`
+	Limitations []string                 `json:"limitations,omitempty"`
+}
+
 type EvidenceNode struct {
 	ID         string            `json:"id"`
 	Kind       string            `json:"kind"`
@@ -64,17 +80,18 @@ type EvidenceEdge struct {
 }
 
 type VerificationResult struct {
-	Claim         string         `json:"claim"`
-	Subject       string         `json:"subject"`
-	Desired       string         `json:"desired"`
-	Observed      string         `json:"observed,omitempty"`
-	Status        Status         `json:"status"`
-	Source        string         `json:"source"`
-	Timestamp     time.Time      `json:"timestamp"`
-	Method        string         `json:"method"`
-	Limitations   []string       `json:"limitations,omitempty"`
-	Observations  []Observation  `json:"observations,omitempty"`
-	Findings      []Finding      `json:"findings,omitempty"`
-	Summary       ReplicaSummary `json:"summary"`
-	EvidenceChain []EvidenceEdge `json:"evidence_chain,omitempty"`
+	Claim         string                `json:"claim"`
+	Subject       string                `json:"subject"`
+	Desired       string                `json:"desired"`
+	Observed      string                `json:"observed,omitempty"`
+	Status        Status                `json:"status"`
+	Source        string                `json:"source"`
+	Timestamp     time.Time             `json:"timestamp"`
+	Method        string                `json:"method"`
+	Limitations   []string              `json:"limitations,omitempty"`
+	Observations  []Observation         `json:"observations,omitempty"`
+	Findings      []Finding             `json:"findings,omitempty"`
+	Summary       ReplicaSummary        `json:"summary"`
+	Configuration ConfigurationEvidence `json:"configuration"`
+	EvidenceChain []EvidenceEdge        `json:"evidence_chain,omitempty"`
 }

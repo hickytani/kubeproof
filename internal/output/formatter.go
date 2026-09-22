@@ -35,6 +35,15 @@ func PrintTruthResult(res truth.VerificationResult) {
 			fmt.Printf("  - %s %s -> %s (%s)\n", obs.Kind, obs.Subject, obs.Value, obs.Status)
 		}
 	}
+	if len(res.Configuration.Declared) > 0 || len(res.Configuration.Observed) > 0 {
+		fmt.Println("CONFIGURATION")
+		for _, ref := range res.Configuration.Declared {
+			fmt.Printf("  declared %s %s/%s at %s\n", ref.Container, ref.Kind, ref.Name, ref.Location)
+		}
+		for _, ref := range res.Configuration.Observed {
+			fmt.Printf("  observed pod/%s %s %s/%s at %s\n", ref.Pod, ref.Container, ref.Kind, ref.Name, ref.Location)
+		}
+	}
 	if len(res.Findings) > 0 {
 		fmt.Println("FINDINGS")
 		for _, finding := range res.Findings {
@@ -86,6 +95,15 @@ func BuildExplainText(res truth.VerificationResult) string {
 		lines = append(lines, "", "FINDINGS")
 		for _, finding := range res.Findings {
 			lines = append(lines, fmt.Sprintf("  - %s %s: %s", finding.Status, finding.Subject, finding.Message))
+		}
+	}
+	if len(res.Configuration.Declared) > 0 || len(res.Configuration.Observed) > 0 {
+		lines = append(lines, "", "CONFIGURATION")
+		for _, ref := range res.Configuration.Declared {
+			lines = append(lines, fmt.Sprintf("  declared %s %s/%s at %s", ref.Container, ref.Kind, ref.Name, ref.Location))
+		}
+		for _, ref := range res.Configuration.Observed {
+			lines = append(lines, fmt.Sprintf("  observed pod/%s %s %s/%s at %s", ref.Pod, ref.Container, ref.Kind, ref.Name, ref.Location))
 		}
 	}
 	return strings.Join(lines, "\n")

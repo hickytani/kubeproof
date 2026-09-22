@@ -38,6 +38,21 @@ var scanCmd = &cobra.Command{
 		}
 		out := truth.BuildScanSummary(deployments, results)
 		output.PrintScanSummary(out)
+		hasPartial, hasUnknown := false, false
+		for _, result := range results {
+			if result.Status == truth.StatusPartial {
+				hasPartial = true
+			}
+			if result.Status == truth.StatusUnknown {
+				hasUnknown = true
+			}
+		}
+		if hasPartial {
+			return exitForStatus(truth.StatusPartial)
+		}
+		if hasUnknown {
+			return exitForStatus(truth.StatusUnknown)
+		}
 		return nil
 	},
 }

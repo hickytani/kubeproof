@@ -43,7 +43,7 @@ var explainCmd = &cobra.Command{
 		}
 		res := truth.BuildDeploymentResultWithReplicaSets(dep, replicaSets, pods)
 		fmt.Println(output.BuildExplainText(res))
-		return nil
+		return exitForStatus(res.Status)
 	},
 }
 

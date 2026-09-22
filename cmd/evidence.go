@@ -45,10 +45,10 @@ var evidenceCmd = &cobra.Command{
 		res := truth.BuildDeploymentResultWithReplicaSets(dep, replicaSets, pods)
 		if jsonOut {
 			output.PrintJSON(res)
-			return nil
+			return exitForStatus(res.Status)
 		}
 		output.PrintTruthResult(res)
-		return nil
+		return exitForStatus(res.Status)
 	},
 }
 

@@ -23,6 +23,11 @@ func TestGetDeploymentPodsFollowsReplicaSetOwnership(t *testing.T) {
 	if len(pods) != 1 || pods[0].Name != pod.Name {
 		t.Fatalf("expected only owned Pod, got %+v", pods)
 	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "get" && action.GetResource().Resource == "replicasets" {
+			t.Fatalf("Pod discovery must use the ReplicaSet list, not per-Pod ReplicaSet GETs: %+v", action)
+		}
+	}
 }
 
 func TestGetReplicaSetsForDeploymentFiltersOwners(t *testing.T) {

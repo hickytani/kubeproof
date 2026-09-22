@@ -42,14 +42,9 @@ var verifyCmd = &cobra.Command{
 			}
 			res := truth.BuildDeploymentResultWithReplicaSets(dep, replicaSets, pods)
 			output.PrintTruthResult(res)
-			return nil
+			return exitForStatus(res.Status)
 		case "workload":
-			kind, err := k8s.DescribeWorkloadType(client, namespace, name)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Workload type: %s\n", kind)
-			return nil
+			return fmt.Errorf("verify workload is not supported: StateProof currently verifies Deployments only; use verify deployment %s", name)
 		default:
 			return fmt.Errorf("unsupported resource: %s", resourceType)
 		}

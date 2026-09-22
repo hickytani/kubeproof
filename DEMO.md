@@ -63,7 +63,7 @@ kubectl get pods -n <namespace> -o json
 .\stateproof.exe explain deployment <name> -n <namespace>
 ```
 
-The result compares declared image references with the runtime `imageID` values reported in Pod container status.
+For a definitive `MATCH`, use a digest-pinned image (`image@sha256:...`). The result compares each declared normal or init container by name with the matching runtime `imageID`. A tag-only declaration is `UNKNOWN` without registry evidence.
 
 ## 6. Inspect JSON evidence
 
@@ -101,8 +101,8 @@ kubectl rollout status deployment/<demo-name> -n <namespace> --timeout=180s
 
 ## 9. Interpret the result
 
-- `MATCH` means the observed runtime image IDs matched the declared repository-level identity.
-- `PARTIAL` means observations disagree or contain mixed runtime evidence.
-- `UNKNOWN` means the API did not provide enough usable runtime identity evidence.
+- `MATCH` means every current ready Pod matched each digest-pinned declaration.
+- `PARTIAL` means digest divergence or an incomplete current revision was observed.
+- `UNKNOWN` means immutable runtime evidence is insufficient, including tag-only declarations.
 
 The result does not prove application memory, configuration consumption, Secret use, process behavior, or semantic application health.
