@@ -244,6 +244,19 @@ Snapshots use `schemaVersion: 1`. `compare` returns `0` for `NO_CHANGE`, `2`
 for `CHANGED`, and `1` for malformed, unsupported, or unrelated snapshots.
 It compares Kubernetes evidence, not application behavior or runtime history.
 
+### Post-deployment CI gate
+
+After a Deployment rollout, verify the runtime digest Kubernetes reports for a
+named current-ready container. This is read-only and does not contact a registry:
+
+```powershell
+.\stateproof.exe verify workload deployment/payments -n production --expected-digest api=$env:IMAGE_DIGEST --json
+```
+
+Repeat `--expected-digest` for each normal container to gate. Exit `0` means all
+observed current-ready replicas matched; `2` means drift or incomplete rollout;
+`3` means immutable evidence was insufficient; `1` means an API/operational error.
+
 The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes E2E has not been run in the current development environment because no usable Kubernetes context or API is available.
 
 ## Limitations
