@@ -38,16 +38,18 @@ func verifyDeployment(deployment *appsv1.Deployment, replicaSets []appsv1.Replic
 	configuration := ConfigurationEvidence{Declared: configurationReferences(&deployment.Spec.Template.Spec, deployment.Namespace, ""), Limitations: []string{"Configuration references do not prove runtime materialization or application consumption."}}
 	current := currentReplicaSets(deployment, replicaSets)
 	ready := []corev1.Pod{}
+	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
+	sort.Slice(replicaSets, func(i, j int) bool { return replicaSets[i].Name < replicaSets[j].Name })
 	for _, pod := range pods {
 		if pod.DeletionTimestamp != nil {
 			continue
 		}
 		if len(replicaSets) > 0 && !current[ownerReplicaSetName(&pod)] {
-			findings = append(findings, Finding{Code: "old-revision-pod", Status: StatusStale, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: "Pod belongs to an older Deployment revision and is excluded from current-revision verification"})
+			findings = append(findings, Finding{Code: "old-revision-pod", Reason: ReasonOldRevisionIgnored, Status: StatusStale, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: "Pod belongs to an older Deployment revision and is excluded from current-revision verification"})
 			continue
 		}
 		if !podReady(&pod) {
-			findings = append(findings, Finding{Code: "current-pod-not-ready", Status: StatusPartial, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: "Current-revision Pod is not Ready"})
+			findings = append(findings, Finding{Code: "current-pod-not-ready", Reason: ReasonPodNotReady, Status: StatusPartial, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: "Current-revision Pod is not Ready"})
 			status = StatusPartial
 			continue
 		}
@@ -63,7 +65,7 @@ func verifyDeployment(deployment *appsv1.Deployment, replicaSets []appsv1.Replic
 	}
 	if len(ready) < desired && status != StatusUnknown {
 		status = StatusPartial
-		findings = append(findings, Finding{Code: "current-ready-replicas-incomplete", Status: StatusPartial, Subject: objectID("Deployment", deployment.Namespace, deployment.Name), Message: fmt.Sprintf("expected %d ready current-revision Pods, found %d", desired, len(ready))})
+		findings = append(findings, Finding{Code: "current-ready-replicas-incomplete", Reason: ReasonCurrentRevisionIncomplete, Status: StatusPartial, Subject: objectID("Deployment", deployment.Namespace, deployment.Name), Message: fmt.Sprintf("expected %d ready current-revision Pods, found %d", desired, len(ready))})
 	}
 	for _, pod := range ready {
 		graph = append(graph, EvidenceEdge{From: objectID("ReplicaSet", pod.Namespace, ownerReplicaSetName(&pod)), To: objectID("Pod", pod.Namespace, pod.Name), Type: "owns"})
@@ -108,26 +110,34 @@ func verifyContainerSet(pod *corev1.Pod, declared []corev1.Container, actual []c
 	for _, want := range declared {
 		got, ok := byName[want.Name]
 		if !ok {
-			*findings = append(*findings, Finding{Code: "declared-container-missing", Status: StatusUnknown, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: fmt.Sprintf("Declared %s %q has no matching status", kind, want.Name)})
+			reason := ReasonContainerMissing
+			if init {
+				reason = ReasonInitContainerMissing
+			}
+			*findings = append(*findings, Finding{Code: "declared-container-missing", Reason: reason, Status: StatusUnknown, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: fmt.Sprintf("Declared %s %q has no matching status", kind, want.Name)})
 			result = combineStatus(result, StatusUnknown)
 			continue
 		}
 		obs := Observation{Kind: kind, Subject: objectID("Container", pod.Namespace, pod.Name+"/"+want.Name), Value: got.ImageID, Expected: want.Image, ObservedImage: got.Image, Ready: got.Ready, RestartCount: got.RestartCount, State: containerState(&got), Source: source, Timestamp: time.Now(), Method: "kubernetes-api"}
 		if got.ImageID == "" {
 			obs.Status = StatusUnknown
+			obs.Reason = ReasonImmutableIdentityUnavailable
 			obs.Limitations = []string{"runtime image identity not reported"}
 			result = combineStatus(result, StatusUnknown)
 		} else if matched, reason := imageIdentityMatch(want.Image, got.ImageID); matched {
 			obs.Status = StatusMatch
+			obs.Reason = ReasonDigestMatch
 		} else if parseImageReference(want.Image).Digest == "" {
 			obs.Status = StatusUnknown
+			obs.Reason = ReasonImmutableIdentityUnavailable
 			obs.Limitations = []string{reason}
 			result = combineStatus(result, StatusUnknown)
 		} else {
 			obs.Status = StatusMismatch
+			obs.Reason = ReasonDigestMismatch
 			obs.Limitations = []string{reason}
 			result = combineStatus(result, StatusPartial)
-			*findings = append(*findings, Finding{Code: "runtime-image-divergence", Status: StatusMismatch, Subject: obs.Subject, Message: reason, Evidence: []Observation{obs}})
+			*findings = append(*findings, Finding{Code: "runtime-image-divergence", Reason: ReasonDigestMismatch, Status: StatusMismatch, Subject: obs.Subject, Message: reason, Evidence: []Observation{obs}})
 		}
 		*observations = append(*observations, obs)
 		*graph = append(*graph, EvidenceEdge{From: objectID("Pod", pod.Namespace, pod.Name), To: obs.Subject, Type: "contains", Evidence: []Observation{obs}})
@@ -141,7 +151,11 @@ func verifyContainerSet(pod *corev1.Pod, declared []corev1.Container, actual []c
 			}
 		}
 		if !declaredName {
-			*findings = append(*findings, Finding{Code: "unexpected-container-status", Status: StatusUnknown, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: fmt.Sprintf("Observed %s %q is not declared", kind, name)})
+			reason := ReasonUnexpectedContainer
+			if init {
+				reason = ReasonUnexpectedInitContainer
+			}
+			*findings = append(*findings, Finding{Code: "unexpected-container-status", Reason: reason, Status: StatusUnknown, Subject: objectID("Pod", pod.Namespace, pod.Name), Message: fmt.Sprintf("Observed %s %q is not declared", kind, name)})
 		}
 	}
 	return result
@@ -205,7 +219,14 @@ func BuildDeploymentResultWithReplicaSets(deployment *appsv1.Deployment, replica
 	return buildDeploymentResult(VerifyDeploymentWithReplicaSets(deployment, replicaSets, pods), deployment)
 }
 func buildDeploymentResult(check DeploymentCheck, deployment *appsv1.Deployment) VerificationResult {
-	res := VerificationResult{Claim: "current ready Deployment Pods run declared digest-pinned runtime identities", Subject: objectID("Deployment", deployment.Namespace, deployment.Name), Status: check.Status, Source: "Kubernetes API", Timestamp: time.Now(), Method: "read-only", Limitations: check.Limitations, Observations: check.Evidence, Findings: check.Findings, Summary: check.Summary, Configuration: check.Configuration, EvidenceChain: check.Graph}
+	sort.Slice(check.Findings, func(i, j int) bool {
+		if check.Findings[i].Subject == check.Findings[j].Subject {
+			return check.Findings[i].Reason < check.Findings[j].Reason
+		}
+		return check.Findings[i].Subject < check.Findings[j].Subject
+	})
+	sort.Slice(check.Evidence, func(i, j int) bool { return check.Evidence[i].Subject < check.Evidence[j].Subject })
+	res := VerificationResult{Claim: "current ready Deployment Pods run declared digest-pinned runtime identities", Subject: objectID("Deployment", deployment.Namespace, deployment.Name), Status: check.Status, Source: "Kubernetes API", Timestamp: time.Now(), Method: "read-only", Limitations: check.Limitations, Observations: check.Evidence, Findings: check.Findings, Summary: check.Summary, Configuration: check.Configuration, Evidence: normalizedEvidence(deployment, check), EvidenceChain: check.Graph}
 	if len(deployment.Spec.Template.Spec.Containers) > 0 {
 		res.Desired = deployment.Spec.Template.Spec.Containers[0].Image
 	} else {
@@ -220,6 +241,24 @@ func buildDeploymentResult(check DeploymentCheck, deployment *appsv1.Deployment)
 		res.Observed = "insufficient immutable runtime identity evidence"
 	}
 	return res
+}
+func normalizedEvidence(deployment *appsv1.Deployment, check DeploymentCheck) EvidenceSnapshot {
+	e := EvidenceSnapshot{Deployment: DeploymentEvidence{Namespace: deployment.Namespace, Name: deployment.Name, CurrentRevision: deployment.Annotations["deployment.kubernetes.io/revision"], Generation: deployment.Generation, ObservedGeneration: deployment.Status.ObservedGeneration, AvailableReplicas: deployment.Status.AvailableReplicas, UpdatedReplicas: deployment.Status.UpdatedReplicas, ReadyReplicas: deployment.Status.ReadyReplicas}}
+	if deployment.Spec.Replicas != nil {
+		e.Deployment.DesiredReplicas = *deployment.Spec.Replicas
+	}
+	current := currentReplicaSets(deployment, check.ReplicaSets)
+	for _, rs := range check.ReplicaSets {
+		d := int32(0)
+		if rs.Spec.Replicas != nil {
+			d = *rs.Spec.Replicas
+		}
+		e.ReplicaSets = append(e.ReplicaSets, ReplicaSetEvidence{rs.Namespace, rs.Name, rs.Annotations["deployment.kubernetes.io/revision"], deployment.Name, d, current[rs.Name]})
+	}
+	for _, pod := range check.Pods {
+		e.Pods = append(e.Pods, PodEvidence{pod.Namespace, pod.Name, string(pod.UID), string(pod.Status.Phase), ownerReplicaSetName(&pod), "", podReady(&pod), pod.DeletionTimestamp != nil})
+	}
+	return e
 }
 func BuildScanSummary(deployments []appsv1.Deployment, results map[string]VerificationResult) string {
 	if len(deployments) == 0 {

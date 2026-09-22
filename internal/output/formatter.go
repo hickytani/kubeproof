@@ -32,7 +32,7 @@ func PrintTruthResult(res truth.VerificationResult) {
 	if len(res.Observations) > 0 {
 		fmt.Println("OBSERVATIONS")
 		for _, obs := range res.Observations {
-			fmt.Printf("  - %s %s -> %s (%s)\n", obs.Kind, obs.Subject, obs.Value, obs.Status)
+			fmt.Printf("  - %s %s declared=%s observed=%s (%s, %s)\n", obs.Kind, obs.Subject, obs.Expected, obs.Value, obs.Status, obs.Reason)
 		}
 	}
 	if len(res.Configuration.Declared) > 0 || len(res.Configuration.Observed) > 0 {
@@ -47,7 +47,7 @@ func PrintTruthResult(res truth.VerificationResult) {
 	if len(res.Findings) > 0 {
 		fmt.Println("FINDINGS")
 		for _, finding := range res.Findings {
-			fmt.Printf("  - %s %s: %s\n", finding.Status, finding.Subject, finding.Message)
+			fmt.Printf("  - %s %s [%s]: %s\n", finding.Status, finding.Subject, finding.Reason, finding.Message)
 		}
 	}
 }
@@ -77,11 +77,12 @@ func BuildExplainText(res truth.VerificationResult) string {
 		fmt.Sprintf("Observed: %s", res.Observed),
 		fmt.Sprintf("Replicas: %d desired, %d observed, %d matching, %d divergent", res.Summary.Desired, res.Summary.Observed, res.Summary.Matching, res.Summary.Divergent),
 	}
+	lines = append(lines, fmt.Sprintf("Observed at: %s (this is an API observation snapshot, not continuous runtime history)", res.Timestamp.Format(time.RFC3339)))
 	if len(res.Observations) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, "EVIDENCE")
 		for _, obs := range res.Observations {
-			lines = append(lines, fmt.Sprintf("  - %s %s => %s [%s]", obs.Kind, obs.Subject, obs.Value, obs.Status))
+			lines = append(lines, fmt.Sprintf("  - %s %s: declared=%s observed=%s [%s/%s]", obs.Kind, obs.Subject, obs.Expected, obs.Value, obs.Status, obs.Reason))
 		}
 	}
 	if len(res.Limitations) > 0 {
@@ -94,7 +95,7 @@ func BuildExplainText(res truth.VerificationResult) string {
 	if len(res.Findings) > 0 {
 		lines = append(lines, "", "FINDINGS")
 		for _, finding := range res.Findings {
-			lines = append(lines, fmt.Sprintf("  - %s %s: %s", finding.Status, finding.Subject, finding.Message))
+			lines = append(lines, fmt.Sprintf("  - %s %s [%s]: %s", finding.Status, finding.Subject, finding.Reason, finding.Message))
 		}
 	}
 	if len(res.Configuration.Declared) > 0 || len(res.Configuration.Observed) > 0 {

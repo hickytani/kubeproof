@@ -59,6 +59,19 @@ What Kubernetes API evidence does not establish: application memory, effective i
 
 ## Evidence model
 
+StateProof first normalizes the Kubernetes observations it uses: Deployment
+generation/replicas, Deployment-owned ReplicaSet revisions, and Pod identity,
+phase, owner, readiness, and termination state. It then evaluates named normal
+and init containers against their declared image references and reported runtime
+image IDs. JSON is an intentional audit record, not a raw Kubernetes object
+dump; findings contain stable reason codes such as `DIGEST_MATCH`,
+`DIGEST_MISMATCH`, `IMMUTABLE_IDENTITY_UNAVAILABLE`, and
+`CURRENT_REVISION_INCOMPLETE`.
+
+`explain` renders those structured observations and findings as a readable
+evidence chain, including the observation timestamp. It describes one API
+snapshot, not continuous runtime history.
+
 ```mermaid
 flowchart TD
     A[Deployment PodSpec] --> B[ReplicaSet owner lookup]

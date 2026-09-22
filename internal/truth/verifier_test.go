@@ -1,6 +1,7 @@
 package truth
 
 import (
+	"encoding/json"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -14,6 +15,21 @@ const proxyDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 func deployment(containers, init []corev1.Container) *appsv1.Deployment {
 	replicas := int32(1)
 	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default", Annotations: map[string]string{"deployment.kubernetes.io/revision": "2"}}, Spec: appsv1.DeploymentSpec{Replicas: &replicas, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: containers, InitContainers: init}}}}
+}
+
+func TestEvidenceAndFindingsAreDeterministicAcrossAPIOrdering(t *testing.T) {
+	dep := deployment([]corev1.Container{{Name: "api", Image: "api@" + appDigest}, {Name: "sidecar", Image: "sidecar@" + proxyDigest}}, nil)
+	a := readyPod("a", "api-new", []corev1.ContainerStatus{status("sidecar", proxyDigest), status("api", appDigest)}, nil)
+	b := readyPod("b", "api-old", []corev1.ContainerStatus{status("api", appDigest)}, nil)
+	sets := []appsv1.ReplicaSet{rs("api-old", "1"), rs("api-new", "2")}
+	first := BuildDeploymentResultWithReplicaSets(dep, sets, []corev1.Pod{b, a})
+	second := BuildDeploymentResultWithReplicaSets(dep, []appsv1.ReplicaSet{sets[1], sets[0]}, []corev1.Pod{a, b})
+	first.Timestamp, second.Timestamp = first.Timestamp.UTC(), first.Timestamp.UTC()
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(second)
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatalf("ordering changed normalized result\n%s\n%s", firstJSON, secondJSON)
+	}
 }
 func readyPod(name, rs string, statuses, init []corev1.ContainerStatus) corev1.Pod {
 	return corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: rs}}}, Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}, ContainerStatuses: statuses, InitContainerStatuses: init}}

@@ -16,28 +16,69 @@ const (
 	StatusError        Status = "ERROR"
 )
 
+// ReasonCode is stable machine-readable evidence. Messages may evolve; codes are
+// the contract for automation.
+type ReasonCode string
+
+const (
+	ReasonDigestMatch                  ReasonCode = "DIGEST_MATCH"
+	ReasonDigestMismatch               ReasonCode = "DIGEST_MISMATCH"
+	ReasonImmutableIdentityUnavailable ReasonCode = "IMMUTABLE_IDENTITY_UNAVAILABLE"
+	ReasonCurrentRevisionIncomplete    ReasonCode = "CURRENT_REVISION_INCOMPLETE"
+	ReasonContainerMissing             ReasonCode = "CONTAINER_MISSING"
+	ReasonUnexpectedContainer          ReasonCode = "UNEXPECTED_CONTAINER"
+	ReasonInitContainerMissing         ReasonCode = "INIT_CONTAINER_MISSING"
+	ReasonUnexpectedInitContainer      ReasonCode = "UNEXPECTED_INIT_CONTAINER"
+	ReasonPodNotReady                  ReasonCode = "POD_NOT_READY"
+	ReasonOldRevisionIgnored           ReasonCode = "OLD_REVISION_IGNORED"
+)
+
 type Observation struct {
-	Kind          string    `json:"kind"`
-	Subject       string    `json:"subject"`
-	Value         string    `json:"value"`
-	Expected      string    `json:"expected,omitempty"`
-	ObservedImage string    `json:"observed_image,omitempty"`
-	State         string    `json:"state,omitempty"`
-	Ready         bool      `json:"ready,omitempty"`
-	RestartCount  int32     `json:"restart_count,omitempty"`
-	Source        string    `json:"source"`
-	Timestamp     time.Time `json:"timestamp"`
-	Method        string    `json:"method"`
-	Status        Status    `json:"status"`
-	Limitations   []string  `json:"limitations,omitempty"`
+	Kind          string     `json:"kind"`
+	Subject       string     `json:"subject"`
+	Value         string     `json:"value"`
+	Expected      string     `json:"expected,omitempty"`
+	ObservedImage string     `json:"observed_image,omitempty"`
+	State         string     `json:"state,omitempty"`
+	Ready         bool       `json:"ready,omitempty"`
+	RestartCount  int32      `json:"restart_count,omitempty"`
+	Source        string     `json:"source"`
+	Timestamp     time.Time  `json:"timestamp"`
+	Method        string     `json:"method"`
+	Status        Status     `json:"status"`
+	Reason        ReasonCode `json:"reason,omitempty"`
+	Limitations   []string   `json:"limitations,omitempty"`
 }
 
 type Finding struct {
 	Code     string        `json:"code"`
+	Reason   ReasonCode    `json:"reason"`
 	Status   Status        `json:"status"`
 	Subject  string        `json:"subject"`
 	Message  string        `json:"message"`
 	Evidence []Observation `json:"evidence,omitempty"`
+}
+
+// EvidenceSnapshot is a deliberately small normalized view of API objects; it
+// avoids raw Kubernetes object dumps while retaining audit-relevant fields.
+type EvidenceSnapshot struct {
+	Deployment  DeploymentEvidence   `json:"deployment"`
+	ReplicaSets []ReplicaSetEvidence `json:"replica_sets,omitempty"`
+	Pods        []PodEvidence        `json:"pods,omitempty"`
+}
+type DeploymentEvidence struct {
+	Namespace, Name, CurrentRevision                                   string
+	Generation, ObservedGeneration                                     int64
+	DesiredReplicas, AvailableReplicas, UpdatedReplicas, ReadyReplicas int32
+}
+type ReplicaSetEvidence struct {
+	Namespace, Name, Revision, OwnerDeployment string
+	DesiredReplicas                            int32
+	Current                                    bool
+}
+type PodEvidence struct {
+	Namespace, Name, UID, Phase, OwnerReplicaSet, Revision string
+	Ready, Terminating                                     bool
 }
 
 type ReplicaSummary struct {
@@ -93,5 +134,6 @@ type VerificationResult struct {
 	Findings      []Finding             `json:"findings,omitempty"`
 	Summary       ReplicaSummary        `json:"summary"`
 	Configuration ConfigurationEvidence `json:"configuration"`
+	Evidence      EvidenceSnapshot      `json:"evidence"`
 	EvidenceChain []EvidenceEdge        `json:"evidence_chain,omitempty"`
 }
