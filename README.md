@@ -212,7 +212,7 @@ Real-cluster E2E is deliberately separate and requires an explicit kubeconfig:
 go test -tags=e2e -p 1 ./e2e -v
 ```
 
-The tagged suite creates a temporary namespace, captures the runtime digest reported by a real kubelet, then runs the production CLI for digest-match, digest-mismatch, container-swap, init-container, and tag-only insufficient-evidence scenarios. It never runs as part of `go test ./...`.
+The tagged suite creates a temporary namespace, captures the runtime digest reported by a real kubelet, then runs the compiled production CLI for digest-match, digest-mismatch, container-swap, init-container, rollout selection, tag-only insufficient-evidence, and ReplicaSet-RBAC-denial scenarios. It never runs as part of `go test ./...`. The separate `kubernetes-e2e` GitHub Actions workflow provisions kind before running this suite.
 
 Exit codes are `0` for match, `2` for verified drift or incomplete current revision, `3` for insufficient immutable evidence, and `1` for an operational error.
 

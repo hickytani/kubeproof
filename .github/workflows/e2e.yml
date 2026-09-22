@@ -16,6 +16,10 @@ jobs:
         with:
           cluster_name: stateproof-e2e
           wait: 120s
+      - run: kubectl cluster-info
+      - run: go build -o stateproof .
       - run: go test -tags=e2e -p 1 ./e2e -v
       - if: failure()
-        run: kubectl get deployments,replicasets,pods -A -o wide
+        run: |
+          kubectl get deployments,replicasets,pods -A -o yaml
+          kubectl get events -A --sort-by=.lastTimestamp

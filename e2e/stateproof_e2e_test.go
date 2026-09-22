@@ -14,10 +14,14 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 const timeout = 3 * time.Minute
@@ -81,6 +85,58 @@ func TestStateProofAgainstRealKubernetesAPI(t *testing.T) {
 		pinFromRuntime(t, client, ns.Name, dep.Name, true)
 		runCLI(t, binary, 0, "verify", "deployment", dep.Name, "-n", ns.Name)
 	})
+
+	t.Run("rollout-selects-only-current-ready-revision", func(t *testing.T) {
+		oldImage := discoverRuntimeImage(t, client, ns.Name, "rollout-old", "registry.k8s.io/pause:3.10")
+		newImage := discoverRuntimeImage(t, client, ns.Name, "rollout-new", "registry.k8s.io/pause:3.9")
+		dep := createDeployment(t, client, ns.Name, "rollout", []corev1.Container{{Name: "api", Image: oldImage}}, nil)
+		dep.Spec.MinReadySeconds = 60 // preserves the old Pod while the new Pod becomes Ready.
+		if _, err := client.AppsV1().Deployments(ns.Name).Update(context.Background(), dep, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		waitAvailable(t, client, ns.Name, dep.Name)
+		runCLI(t, binary, 0, "verify", "deployment", dep.Name, "-n", ns.Name)
+		dep = getDeployment(t, client, ns.Name, dep.Name)
+		dep.Spec.Template.Spec.Containers[0].Image = newImage
+		if _, err := client.AppsV1().Deployments(ns.Name).Update(context.Background(), dep, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		waitForCurrentAndOldRevisionPods(t, client, ns.Name, dep.Name)
+		output := runCLI(t, binary, 0, "evidence", "deployment", dep.Name, "-n", ns.Name, "--json")
+		var result struct {
+			Summary struct {
+				Observed int `json:"observed"`
+			} `json:"summary"`
+			Findings []struct {
+				Code string `json:"code"`
+			} `json:"findings"`
+		}
+		if err := json.Unmarshal(output, &result); err != nil {
+			t.Fatalf("decode rollout evidence: %v\n%s", err, output)
+		}
+		if result.Summary.Observed != 1 {
+			t.Fatalf("current verification must count exactly one ready current Pod, got %d", result.Summary.Observed)
+		}
+		foundOld := false
+		for _, finding := range result.Findings {
+			if finding.Code == "old-revision-pod" {
+				foundOld = true
+			}
+		}
+		if !foundOld {
+			t.Fatalf("expected old-revision evidence in %s", output)
+		}
+	})
+
+	t.Run("rbac-denial-is-operational-error", func(t *testing.T) {
+		dep := createDeployment(t, client, ns.Name, "rbac", []corev1.Container{{Name: "api", Image: "registry.k8s.io/pause:3.10"}}, nil)
+		waitAvailable(t, client, ns.Name, dep.Name)
+		kubeconfig := restrictedKubeconfig(t, client, config, ns.Name)
+		output := runCLIWithEnv(t, binary, 1, []string{"KUBECONFIG=" + kubeconfig}, "verify", "deployment", dep.Name, "-n", ns.Name)
+		if !strings.Contains(strings.ToLower(string(output)), "replicasets") || !strings.Contains(strings.ToLower(string(output)), "forbidden") {
+			t.Fatalf("expected actionable ReplicaSet authorization error, got %s", output)
+		}
+	})
 }
 
 func buildBinary(t *testing.T) string {
@@ -115,6 +171,82 @@ func waitAvailable(t *testing.T, c kubernetes.Interface, ns, name string) {
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("Deployment %s did not become available within %s", name, timeout)
+}
+func discoverRuntimeImage(t *testing.T, c kubernetes.Interface, ns, name, image string) string {
+	t.Helper()
+	dep := createDeployment(t, c, ns, name, []corev1.Container{{Name: "api", Image: image}}, nil)
+	waitAvailable(t, c, ns, dep.Name)
+	return podRuntimeImage(t, c, ns, name, "api")
+}
+func podRuntimeImage(t *testing.T, c kubernetes.Interface, ns, name, container string) string {
+	t.Helper()
+	pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil || len(pods.Items) != 1 {
+		t.Fatalf("get runtime pod: %v (%d pods)", err, len(pods.Items))
+	}
+	for _, status := range pods.Items[0].Status.ContainerStatuses {
+		if status.Name == container && status.ImageID != "" {
+			return runtimeReference(status.ImageID)
+		}
+	}
+	t.Fatalf("runtime image ID missing for %s/%s", name, container)
+	return ""
+}
+func waitForCurrentAndOldRevisionPods(t *testing.T, c kubernetes.Interface, ns, name string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		dep := getDeployment(t, c, ns, name)
+		revision := dep.Annotations["deployment.kubernetes.io/revision"]
+		sets, err := c.AppsV1().ReplicaSets(ns).List(context.Background(), metav1.ListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, old := map[string]bool{}, map[string]bool{}
+		for _, rs := range sets.Items {
+			for _, owner := range rs.OwnerReferences {
+				if owner.Kind == "Deployment" && owner.Name == name {
+					if rs.Annotations["deployment.kubernetes.io/revision"] == revision {
+						current[rs.Name] = true
+					} else {
+						old[rs.Name] = true
+					}
+				}
+			}
+		}
+		pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		currentReady, oldPresent := false, false
+		for _, pod := range pods.Items {
+			owner := ""
+			for _, ref := range pod.OwnerReferences {
+				if ref.Kind == "ReplicaSet" {
+					owner = ref.Name
+				}
+			}
+			if current[owner] && podReady(&pod) {
+				currentReady = true
+			}
+			if old[owner] && pod.DeletionTimestamp == nil {
+				oldPresent = true
+			}
+		}
+		if currentReady && oldPresent {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("rollout did not produce a ready current Pod and retained old revision Pod within %s", timeout)
+}
+func podReady(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 func getDeployment(t *testing.T, c kubernetes.Interface, ns, name string) *appsv1.Deployment {
 	t.Helper()
@@ -168,10 +300,41 @@ func replaceDigest(image string) string {
 	}
 	return image[:len(image)-1] + "0"
 }
-func runCLI(t *testing.T, binary string, want int, args ...string) {
+func restrictedKubeconfig(t *testing.T, c kubernetes.Interface, base *rest.Config, namespace string) string {
+	t.Helper()
+	sa, err := c.CoreV1().ServiceAccounts(namespace).Create(context.Background(), &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "stateproof-denied"}}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "stateproof-deployment-only"}, Rules: []rbacv1.PolicyRule{{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: []string{"get"}}}}
+	if _, err := c.RbacV1().Roles(namespace).Create(context.Background(), role, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RbacV1().RoleBindings(namespace).Create(context.Background(), &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "stateproof-deployment-only"}, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: sa.Name, Namespace: namespace}}, RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: role.Name}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := c.CoreV1().ServiceAccounts(namespace).CreateToken(context.Background(), sa.Name, &authenticationv1.TokenRequest{}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "restricted-kubeconfig")
+	kubeconfig := clientcmdapi.NewConfig()
+	kubeconfig.Clusters["cluster"] = &clientcmdapi.Cluster{Server: base.Host, CertificateAuthorityData: base.CAData, InsecureSkipTLSVerify: base.Insecure}
+	kubeconfig.AuthInfos["stateproof"] = &clientcmdapi.AuthInfo{Token: token.Status.Token}
+	kubeconfig.Contexts["restricted"] = &clientcmdapi.Context{Cluster: "cluster", AuthInfo: "stateproof", Namespace: namespace}
+	kubeconfig.CurrentContext = "restricted"
+	if err := clientcmd.WriteToFile(*kubeconfig, path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+func runCLI(t *testing.T, binary string, want int, args ...string) []byte {
+	return runCLIWithEnv(t, binary, want, nil, args...)
+}
+func runCLIWithEnv(t *testing.T, binary string, want int, extraEnv []string, args ...string) []byte {
 	t.Helper()
 	command := exec.Command(binary, args...)
-	command.Env = os.Environ()
+	command.Env = append(os.Environ(), extraEnv...)
 	output, err := command.CombinedOutput()
 	actual := 0
 	if err != nil {
@@ -187,4 +350,5 @@ func runCLI(t *testing.T, binary string, want int, args ...string) {
 		t.Fatalf("want exit %d, got %d\n%s\njson=%v", want, actual, output, document)
 	}
 	fmt.Printf("STATEPROOF E2E scenario %s: PASS\n", strings.Join(args[:2], " "))
+	return output
 }
