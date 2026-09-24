@@ -1,120 +1,94 @@
-# Demonstration procedure
+# KubeProof Demonstration & Launch Guide
 
-This is a demonstration procedure. It was not executed against a live Kubernetes cluster in the current development environment.
+KubeProof (`stateproof`) is a read-only Kubernetes runtime truth verifier and cryptographic attestation engine.
 
-## Option A: existing kubeconfig-backed cluster
+---
 
-The procedure uses an existing kubeconfig-backed cluster and should inspect a safe test or demo workload. Do not mutate an existing production workload.
+## Prerequisites
 
-## 1. Prerequisites
-
-Have the following available:
-
-- Go
+- Go 1.26+
 - `kubectl`
-- a reachable Kubernetes API
-- credentials with read access to Deployments, ReplicaSets, and Pods
+- Access to a Kubernetes cluster (Kind, Minikube, or live cluster)
+- Read-only RBAC access (`deploy/rbac-readonly.yaml`)
 
-Build StateProof from the repository root:
+Build the CLI binary:
 
 ```powershell
 go build -o stateproof.exe .
 ```
 
-## 2. Configure kubeconfig
+---
 
-Use the normal kubeconfig and select a context without placing its contents in the repository:
+## 1. Verify Workloads (Deployments, StatefulSets, DaemonSets)
 
+### Deployment Verification
 ```powershell
-kubectl config get-contexts
-kubectl config current-context
-kubectl cluster-info
-kubectl get nodes -o wide
+.\stateproof.exe verify workload deployment/payments -n production
+.\stateproof.exe explain deployment payments -n production
 ```
 
-StateProof can select a context explicitly:
-
+### StatefulSet Verification
 ```powershell
-.\stateproof.exe --context <context> verify deployment <name> -n <namespace>
+.\stateproof.exe verify workload statefulset/database -n production
+.\stateproof.exe explain statefulset database -n production
 ```
 
-## 3. Select a namespace
-
-Inspect namespaces and choose a safe namespace:
-
+### DaemonSet Verification
 ```powershell
-kubectl get namespaces
-kubectl get deployments -n <namespace>
+.\stateproof.exe verify workload daemonset/node-agent -n kube-system
 ```
 
-## 4. Inspect a Deployment
+---
 
-Before running StateProof, inspect the source objects directly:
+## 2. Post-Deployment CI/CD Gate (`--expected-digest`)
 
-```powershell
-kubectl get deployment <name> -n <namespace> -o yaml
-kubectl get replicasets -n <namespace> -o wide
-kubectl get pods -n <namespace> -o wide
-kubectl get pods -n <namespace> -o json
-```
-
-## 5. Run verification
+Enforce exact image digests in CI/CD release pipelines without registry lookups:
 
 ```powershell
-.\stateproof.exe verify deployment <name> -n <namespace>
-.\stateproof.exe explain deployment <name> -n <namespace>
+.\stateproof.exe verify workload deployment/payments -n production --expected-digest api=sha256:<64-hex-digest> --json
 ```
 
-For a definitive `MATCH`, use a digest-pinned image (`image@sha256:...`). The result compares each declared normal or init container by name with the matching runtime `imageID`. A tag-only declaration is `UNKNOWN` without registry evidence.
+* **Exit Code `0`**: Verified MATCH (Rollout successful and image digests match).
+* **Exit Code `2`**: Verified Drift or Incomplete Rollout.
+* **Exit Code `3`**: Insufficient immutable identity (e.g. tag-only declaration).
+* **Exit Code `1`**: Operational or authorization error.
 
-## 6. Inspect JSON evidence
+---
+
+## 3. Cryptographic Ed25519 Attestation Lifecycle
+
+Turn a successful verification into a signed, portable evidence artifact:
 
 ```powershell
-.\stateproof.exe evidence deployment <name> -n <namespace> --json
-.\stateproof.exe scan <namespace>
+# Step 1: Generate key pair
+.\stateproof.exe keygen --output production.key
+
+# Step 2: Create signed attestation (requires MATCH status)
+.\stateproof.exe attest workload deployment/payments -n production --signing-key production.key --output payments.attestation.json --expected-digest api=sha256:<digest>
+
+# Step 3: Verify attestation completely offline (zero cluster or network access)
+.\stateproof.exe verify-attestation payments.attestation.json --public-key production.key.pub
 ```
 
-Compare the `desired`, `observations`, `status`, and `evidence_chain` fields with the Kubernetes objects inspected in step 4.
+---
 
-## 7. Introduce a deliberate mismatch
+## 4. Offline Snapshot Comparison (`compare`)
 
-Only do this for a temporary isolated workload created specifically for the demonstration. Do not change an existing production workload.
-
-For an isolated Deployment, change its image and inspect the rollout while it is in progress:
+Capture snapshots before and after maintenance, then diff offline:
 
 ```powershell
-kubectl set image deployment/<demo-name> <container>=<different-image> -n <namespace>
-kubectl get pods -n <namespace> -o wide
-kubectl get replicasets -n <namespace> -o wide
-.\stateproof.exe evidence deployment <demo-name> -n <namespace> --json
+.\stateproof.exe evidence deployment payments -n production --json > before.json
+# ... perform update / maintenance ...
+.\stateproof.exe evidence deployment payments -n production --json > after.json
+.\stateproof.exe compare before.json after.json --json
 ```
 
-Do not claim a mismatch if the rollout has already converged or if the observed evidence is incomplete.
+---
 
-## 8. Verify again
+## 5. Disposable Real E2E Test Suite
 
-Wait for the isolated rollout to finish, then compare the before and after evidence:
-
-```powershell
-kubectl rollout status deployment/<demo-name> -n <namespace> --timeout=180s
-.\stateproof.exe verify deployment <demo-name> -n <namespace>
-.\stateproof.exe evidence deployment <demo-name> -n <namespace> --json
-```
-
-## 9. Interpret the result
-
-- `MATCH` means every current ready Pod matched each digest-pinned declaration.
-- `PARTIAL` means digest divergence or an incomplete current revision was observed.
-- `UNKNOWN` means immutable runtime evidence is insufficient, including tag-only declarations.
-
-The result does not prove application memory, configuration consumption, Secret use, process behavior, or semantic application health.
-
-## Option B: disposable real E2E suite
-
-The repository contains a build-tagged real Kubernetes suite. It is intentionally excluded from ordinary Go tests and creates all fixtures in a temporary namespace:
+Run the real Kind-backed E2E integration test suite:
 
 ```powershell
 go test -tags=e2e -p 1 ./e2e -v
 ```
-
-It requires `KUBECONFIG` to point to a cluster where the test identity can create and delete a namespace. The test captures each Pod's reported `imageID`, pins the paused Deployment to that observed digest, and invokes the production CLI. This demonstrates the actual `Deployment -> ReplicaSet -> Pod -> container -> imageID` path, plus tag-only insufficient evidence, digest drift, container-name swaps, init-container evidence, a rollout with retained old-revision Pods, and an intentionally denied ReplicaSet list. The GitHub Actions `kubernetes-e2e` workflow provisions kind separately from ordinary CI.
