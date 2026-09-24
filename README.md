@@ -26,15 +26,15 @@ Runtime Image Identity
 
 ## What StateProof verifies
 
-StateProof currently verifies Deployment runtime identity from the Kubernetes API:
+StateProof currently verifies Deployment, StatefulSet, and DaemonSet runtime identity from the Kubernetes API:
 
-- the declared container and init-container images in a Deployment PodSpec
-- the ReplicaSet ownership path used to locate the Deployment's Pods
+- the declared container and init-container images in a workload PodSpec
+- the ReplicaSet or ControllerRevision ownership path used to locate current revision Pods
 - the declared container name and image, observed container image, runtime `imageID`, readiness, state, and restart count where Kubernetes reports them
 - whether runtime image identity is consistent with the declared image repository
-- desired versus observed replica counts
+- desired versus observed replica/scheduled counts
 - partial and unknown evidence when replicas disagree or runtime identity is missing
-- stale ReplicaSet revision evidence when revision annotations are available
+- stale revision evidence when revision metadata is available
 - an evidence result in human-readable or JSON form
 
 The verifier uses `status.containerStatuses[].imageID` and `status.initContainerStatuses[].imageID` as runtime identity. A digest-pinned declaration can be matched to that exact digest. A tag-only declaration is `UNKNOWN`: Kubernetes API evidence cannot prove which immutable artifact a movable tag resolves to without registry evidence.
@@ -281,9 +281,9 @@ The production CLI uses a real kubeconfig-backed Kubernetes API. Real Kubernetes
 ## Limitations
 
 - Tag-only images are insufficient immutable identity evidence; pin images by digest for `MATCH`.
-- ReplicaSet list failures are operational errors, not silently downgraded to absent evidence.
+- ReplicaSet and ControllerRevision list failures are operational errors, not silently downgraded to absent evidence.
 - The verifier does not inspect application processes, memory, logs, or network behavior.
-- The current CLI's full verification path is Deployment-specific.
+- Supported workload types are Deployment, StatefulSet, and DaemonSet (Jobs, CronJobs, Argo Rollouts, and custom controllers are not currently supported).
 - A real cluster is required for end-to-end validation against live Kubernetes objects.
 
 ## Roadmap

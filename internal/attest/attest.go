@@ -91,8 +91,22 @@ func NewAttestation(result truth.VerificationResult, expected map[string]string,
 
 	// Extract deployment name and namespace from the subject (e.g., "Deployment/production/payments").
 	workload := result.Subject
-	namespace := result.Evidence.Deployment.Namespace
-	deploymentName := result.Evidence.Deployment.Name
+	namespace := ""
+	deploymentName := ""
+	revision := ""
+	if result.Evidence.Deployment.Name != "" {
+		namespace = result.Evidence.Deployment.Namespace
+		deploymentName = result.Evidence.Deployment.Name
+		revision = result.Evidence.Deployment.CurrentRevision
+	} else if result.Evidence.StatefulSet.Name != "" {
+		namespace = result.Evidence.StatefulSet.Namespace
+		deploymentName = result.Evidence.StatefulSet.Name
+		revision = result.Evidence.StatefulSet.CurrentRevision
+	} else if result.Evidence.DaemonSet.Name != "" {
+		namespace = result.Evidence.DaemonSet.Namespace
+		deploymentName = result.Evidence.DaemonSet.Name
+		revision = result.Evidence.DaemonSet.CurrentRevision
+	}
 
 	a := &Attestation{
 		SchemaVersion:      1,
@@ -103,7 +117,7 @@ func NewAttestation(result truth.VerificationResult, expected map[string]string,
 		Workload:           workload,
 		Namespace:          namespace,
 		Deployment:         deploymentName,
-		DeploymentRevision: result.Evidence.Deployment.CurrentRevision,
+		DeploymentRevision: revision,
 		ReplicaEvidence: ReplicaEvidence{
 			Desired:  result.Summary.Desired,
 			Observed: result.Summary.Observed,

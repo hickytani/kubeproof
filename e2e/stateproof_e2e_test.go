@@ -213,6 +213,26 @@ func TestStateProofAgainstRealKubernetesAPI(t *testing.T) {
 		// Not pinned to runtime image ID -> mismatch
 		runCLI(t, binary, 2, "attest", "workload", "deployment/"+depMismatched.Name, "-n", ns.Name, "--signing-key", keyPath, "--output", filepath.Join(tempDir, "should-not-exist.json"))
 	})
+
+	t.Run("statefulset-verification", func(t *testing.T) {
+		sts := createStatefulSet(t, client, ns.Name, "sts-db", []corev1.Container{{Name: "db", Image: "registry.k8s.io/pause:3.10"}})
+		waitStsAvailable(t, client, ns.Name, sts.Name)
+		pinStsFromRuntime(t, client, ns.Name, sts.Name)
+		digest := digestOf(podRuntimeImageSts(t, client, ns.Name, sts.Name, "db"))
+		runCLI(t, binary, 0, "verify", "workload", "statefulset/"+sts.Name, "-n", ns.Name, "--expected-digest", "db="+digest)
+		wrong := replaceDigest(digest)
+		runCLI(t, binary, 2, "verify", "workload", "statefulset/"+sts.Name, "-n", ns.Name, "--expected-digest", "db="+wrong)
+	})
+
+	t.Run("daemonset-verification", func(t *testing.T) {
+		ds := createDaemonSet(t, client, ns.Name, "ds-agent", []corev1.Container{{Name: "agent", Image: "registry.k8s.io/pause:3.10"}})
+		waitDsAvailable(t, client, ns.Name, ds.Name)
+		pinDsFromRuntime(t, client, ns.Name, ds.Name)
+		digest := digestOf(podRuntimeImageDs(t, client, ns.Name, ds.Name, "agent"))
+		runCLI(t, binary, 0, "verify", "workload", "daemonset/"+ds.Name, "-n", ns.Name, "--expected-digest", "agent="+digest)
+		wrong := replaceDigest(digest)
+		runCLI(t, binary, 2, "verify", "workload", "daemonset/"+ds.Name, "-n", ns.Name, "--expected-digest", "agent="+wrong)
+	})
 }
 
 func buildBinary(t *testing.T) string {
@@ -433,4 +453,146 @@ func runCLIWithEnv(t *testing.T, binary string, want int, extraEnv []string, arg
 	}
 	fmt.Printf("STATEPROOF E2E scenario %s: PASS\n", strings.Join(args[:2], " "))
 	return output
+}
+
+func createStatefulSet(t *testing.T, c kubernetes.Interface, ns, name string, containers []corev1.Container) *appsv1.StatefulSet {
+	t.Helper()
+	replicas := int32(1)
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec:       corev1.PodSpec{Containers: containers},
+			},
+		},
+	}
+	res, err := c.AppsV1().StatefulSets(ns).Create(context.Background(), sts, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func createDaemonSet(t *testing.T, c kubernetes.Interface, ns, name string, containers []corev1.Container) *appsv1.DaemonSet {
+	t.Helper()
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec:       corev1.PodSpec{Containers: containers},
+			},
+		},
+	}
+	res, err := c.AppsV1().DaemonSets(ns).Create(context.Background(), ds, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func waitStsAvailable(t *testing.T, c kubernetes.Interface, ns, name string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		sts, err := c.AppsV1().StatefulSets(ns).Get(context.Background(), name, metav1.GetOptions{})
+		if err == nil && sts.Status.ReadyReplicas == 1 {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("StatefulSet %s did not become ready within %s", name, timeout)
+}
+
+func waitDsAvailable(t *testing.T, c kubernetes.Interface, ns, name string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ds, err := c.AppsV1().DaemonSets(ns).Get(context.Background(), name, metav1.GetOptions{})
+		if err == nil && ds.Status.NumberReady > 0 {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("DaemonSet %s did not become ready within %s", name, timeout)
+}
+
+func podRuntimeImageSts(t *testing.T, c kubernetes.Interface, ns, name, container string) string {
+	t.Helper()
+	pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil || len(pods.Items) == 0 {
+		t.Fatalf("get runtime pod for sts: %v", err)
+	}
+	for _, status := range pods.Items[0].Status.ContainerStatuses {
+		if status.Name == container && status.ImageID != "" {
+			return runtimeReference(status.ImageID)
+		}
+	}
+	t.Fatalf("runtime image ID missing for sts %s/%s", name, container)
+	return ""
+}
+
+func podRuntimeImageDs(t *testing.T, c kubernetes.Interface, ns, name, container string) string {
+	t.Helper()
+	pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil || len(pods.Items) == 0 {
+		t.Fatalf("get runtime pod for ds: %v", err)
+	}
+	for _, status := range pods.Items[0].Status.ContainerStatuses {
+		if status.Name == container && status.ImageID != "" {
+			return runtimeReference(status.ImageID)
+		}
+	}
+	t.Fatalf("runtime image ID missing for ds %s/%s", name, container)
+	return ""
+}
+
+func pinStsFromRuntime(t *testing.T, c kubernetes.Interface, ns, name string) {
+	t.Helper()
+	sts, err := c.AppsV1().StatefulSets(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil || len(pods.Items) == 0 {
+		t.Fatalf("get runtime pod: %v", err)
+	}
+	pod := pods.Items[0]
+	byName := map[string]string{}
+	for _, s := range pod.Status.ContainerStatuses {
+		byName[s.Name] = runtimeReference(s.ImageID)
+	}
+	for i := range sts.Spec.Template.Spec.Containers {
+		sts.Spec.Template.Spec.Containers[i].Image = byName[sts.Spec.Template.Spec.Containers[i].Name]
+	}
+	if _, err := c.AppsV1().StatefulSets(ns).Update(context.Background(), sts, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func pinDsFromRuntime(t *testing.T, c kubernetes.Interface, ns, name string) {
+	t.Helper()
+	ds, err := c.AppsV1().DaemonSets(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pods, err := c.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: "app=" + name})
+	if err != nil || len(pods.Items) == 0 {
+		t.Fatalf("get runtime pod: %v", err)
+	}
+	pod := pods.Items[0]
+	byName := map[string]string{}
+	for _, s := range pod.Status.ContainerStatuses {
+		byName[s.Name] = runtimeReference(s.ImageID)
+	}
+	for i := range ds.Spec.Template.Spec.Containers {
+		ds.Spec.Template.Spec.Containers[i].Image = byName[ds.Spec.Template.Spec.Containers[i].Name]
+	}
+	if _, err := c.AppsV1().DaemonSets(ns).Update(context.Background(), ds, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 }

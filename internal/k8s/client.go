@@ -142,3 +142,80 @@ func DescribeWorkloadType(client kubernetes.Interface, namespace, name string) (
 	}
 	return "", fmt.Errorf("resource %s/%s not found", namespace, name)
 }
+
+func GetStatefulSetByName(client kubernetes.Interface, namespace, name string) (*appsv1.StatefulSet, error) {
+	return client.AppsV1().StatefulSets(namespace).Get(context.Background(), name, metav1.GetOptions{})
+}
+
+func GetControllerRevisionsForStatefulSet(client kubernetes.Interface, namespace string, sts *appsv1.StatefulSet) ([]appsv1.ControllerRevision, error) {
+	list, err := client.AppsV1().ControllerRevisions(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]appsv1.ControllerRevision, 0)
+	for _, cr := range list.Items {
+		for _, owner := range cr.OwnerReferences {
+			if owner.Kind == "StatefulSet" && owner.Name == sts.Name {
+				matches = append(matches, cr)
+				break
+			}
+		}
+	}
+	return matches, nil
+}
+
+func GetStatefulSetPods(client kubernetes.Interface, namespace string, sts *appsv1.StatefulSet) ([]corev1.Pod, error) {
+	list, err := client.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]corev1.Pod, 0)
+	for _, pod := range list.Items {
+		for _, owner := range pod.OwnerReferences {
+			if owner.Kind == "StatefulSet" && owner.Name == sts.Name {
+				matches = append(matches, pod)
+				break
+			}
+		}
+	}
+	return matches, nil
+}
+
+func GetDaemonSetByName(client kubernetes.Interface, namespace, name string) (*appsv1.DaemonSet, error) {
+	return client.AppsV1().DaemonSets(namespace).Get(context.Background(), name, metav1.GetOptions{})
+}
+
+func GetControllerRevisionsForDaemonSet(client kubernetes.Interface, namespace string, ds *appsv1.DaemonSet) ([]appsv1.ControllerRevision, error) {
+	list, err := client.AppsV1().ControllerRevisions(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]appsv1.ControllerRevision, 0)
+	for _, cr := range list.Items {
+		for _, owner := range cr.OwnerReferences {
+			if owner.Kind == "DaemonSet" && owner.Name == ds.Name {
+				matches = append(matches, cr)
+				break
+			}
+		}
+	}
+	return matches, nil
+}
+
+func GetDaemonSetPods(client kubernetes.Interface, namespace string, ds *appsv1.DaemonSet) ([]corev1.Pod, error) {
+	list, err := client.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	matches := make([]corev1.Pod, 0)
+	for _, pod := range list.Items {
+		for _, owner := range pod.OwnerReferences {
+			if owner.Kind == "DaemonSet" && owner.Name == ds.Name {
+				matches = append(matches, pod)
+				break
+			}
+		}
+	}
+	return matches, nil
+}
+

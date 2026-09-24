@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"k8s-truth/internal/k8s"
 	"k8s-truth/internal/output"
-	"k8s-truth/internal/truth"
 )
 
 var evidenceCmd = &cobra.Command{
@@ -27,22 +25,10 @@ var evidenceCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if resourceType != "deployment" {
-			return fmt.Errorf("unsupported resource for evidence: %s", resourceType)
-		}
-		dep, err := k8s.GetDeploymentByName(client, namespace, name)
+		res, err := verifyWorkload(client, namespace, resourceType, name)
 		if err != nil {
 			return err
 		}
-		pods, err := k8s.GetDeploymentPods(client, namespace, dep)
-		if err != nil {
-			return err
-		}
-		replicaSets, err := k8s.GetReplicaSetsForDeployment(client, namespace, dep)
-		if err != nil {
-			return err
-		}
-		res := truth.BuildDeploymentResultWithReplicaSets(dep, replicaSets, pods)
 		if jsonOut {
 			output.PrintJSON(res)
 			return exitForStatus(res.Status)

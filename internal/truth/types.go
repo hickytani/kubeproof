@@ -62,23 +62,42 @@ type Finding struct {
 // EvidenceSnapshot is a deliberately small normalized view of API objects; it
 // avoids raw Kubernetes object dumps while retaining audit-relevant fields.
 type EvidenceSnapshot struct {
-	Deployment  DeploymentEvidence   `json:"deployment"`
-	ReplicaSets []ReplicaSetEvidence `json:"replica_sets,omitempty"`
-	Pods        []PodEvidence        `json:"pods,omitempty"`
+	Deployment          DeploymentEvidence           `json:"deployment,omitempty"`
+	StatefulSet         StatefulSetEvidence          `json:"statefulset,omitempty"`
+	DaemonSet           DaemonSetEvidence            `json:"daemonset,omitempty"`
+	ReplicaSets         []ReplicaSetEvidence         `json:"replica_sets,omitempty"`
+	ControllerRevisions []ControllerRevisionEvidence `json:"controller_revisions,omitempty"`
+	Pods                []PodEvidence                `json:"pods,omitempty"`
 }
 type DeploymentEvidence struct {
 	Namespace, Name, CurrentRevision                                   string
 	Generation, ObservedGeneration                                     int64
 	DesiredReplicas, AvailableReplicas, UpdatedReplicas, ReadyReplicas int32
 }
+type StatefulSetEvidence struct {
+	Namespace, Name, CurrentRevision, UpdateRevision string
+	Generation, ObservedGeneration                 int64
+	DesiredReplicas, ReadyReplicas, UpdatedReplicas int32
+}
+type DaemonSetEvidence struct {
+	Namespace, Name, CurrentRevision               string
+	Generation, ObservedGeneration                 int64
+	DesiredNumberScheduled, CurrentNumberScheduled int32
+	NumberReady, UpdatedNumberScheduled            int32
+}
 type ReplicaSetEvidence struct {
 	Namespace, Name, Revision, OwnerDeployment string
 	DesiredReplicas                            int32
 	Current                                    bool
 }
+type ControllerRevisionEvidence struct {
+	Namespace, Name, OwnerWorkload string
+	Revision                       int64
+	Current                        bool
+}
 type PodEvidence struct {
-	Namespace, Name, UID, Phase, OwnerReplicaSet, Revision string
-	Ready, Terminating                                     bool
+	Namespace, Name, UID, Phase, OwnerReplicaSet, OwnerControllerRevision, Revision string
+	Ready, Terminating                                                               bool
 }
 
 type ReplicaSummary struct {

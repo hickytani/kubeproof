@@ -49,11 +49,14 @@ func CompareSnapshots(before, after VerificationResult) (ComparisonResult, error
 	}
 	r := ComparisonResult{1, before.Subject, ComparisonNoChange, nil}
 	add := func(c ComparisonCode, s, b, a string) { r.Changes = append(r.Changes, ComparisonChange{c, s, b, a}) }
-	if before.Evidence.Deployment.CurrentRevision != after.Evidence.Deployment.CurrentRevision {
-		add(ChangeRevision, before.Subject, before.Evidence.Deployment.CurrentRevision, after.Evidence.Deployment.CurrentRevision)
+	bRev, aRev := workloadRevision(before.Evidence), workloadRevision(after.Evidence)
+	if bRev != aRev {
+		add(ChangeRevision, before.Subject, bRev, aRev)
 	}
-	if before.Evidence.Deployment.ReadyReplicas != after.Evidence.Deployment.ReadyReplicas || before.Evidence.Deployment.DesiredReplicas != after.Evidence.Deployment.DesiredReplicas {
-		add(ChangeReplicas, before.Subject, fmt.Sprintf("desired=%d ready=%d", before.Evidence.Deployment.DesiredReplicas, before.Evidence.Deployment.ReadyReplicas), fmt.Sprintf("desired=%d ready=%d", after.Evidence.Deployment.DesiredReplicas, after.Evidence.Deployment.ReadyReplicas))
+	bDes, bReady := workloadReplicas(before.Evidence)
+	aDes, aReady := workloadReplicas(after.Evidence)
+	if bDes != aDes || bReady != aReady {
+		add(ChangeReplicas, before.Subject, fmt.Sprintf("desired=%d ready=%d", bDes, bReady), fmt.Sprintf("desired=%d ready=%d", aDes, aReady))
 	}
 	comparePods(before.Evidence.Pods, after.Evidence.Pods, add)
 	compareObs(before.Observations, after.Observations, add)
@@ -67,6 +70,32 @@ func CompareSnapshots(before, after VerificationResult) (ComparisonResult, error
 		r.Status = ComparisonChanged
 	}
 	return r, nil
+}
+
+func workloadRevision(e EvidenceSnapshot) string {
+	if e.Deployment.Name != "" {
+		return e.Deployment.CurrentRevision
+	}
+	if e.StatefulSet.Name != "" {
+		return e.StatefulSet.CurrentRevision
+	}
+	if e.DaemonSet.Name != "" {
+		return e.DaemonSet.CurrentRevision
+	}
+	return ""
+}
+
+func workloadReplicas(e EvidenceSnapshot) (desired, ready int32) {
+	if e.Deployment.Name != "" {
+		return e.Deployment.DesiredReplicas, e.Deployment.ReadyReplicas
+	}
+	if e.StatefulSet.Name != "" {
+		return e.StatefulSet.DesiredReplicas, e.StatefulSet.ReadyReplicas
+	}
+	if e.DaemonSet.Name != "" {
+		return e.DaemonSet.DesiredNumberScheduled, e.DaemonSet.NumberReady
+	}
+	return 0, 0
 }
 func comparePods(b, a []PodEvidence, add func(ComparisonCode, string, string, string)) {
 	bm, am := map[string]PodEvidence{}, map[string]PodEvidence{}

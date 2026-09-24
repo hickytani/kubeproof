@@ -44,3 +44,48 @@ func TestGetReplicaSetsForDeploymentFiltersOwners(t *testing.T) {
 		t.Fatalf("expected only owned ReplicaSet, got %+v", sets)
 	}
 }
+
+func TestGetStatefulSetPodsFollowsDirectOwnership(t *testing.T) {
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "db-0", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}}}}
+	unrelated := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "other-0", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "other"}}}}
+	client := fake.NewSimpleClientset(sts, pod, unrelated)
+
+	pods, err := GetStatefulSetPods(client, "default", sts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods) != 1 || pods[0].Name != pod.Name {
+		t.Fatalf("expected only owned StatefulSet pod, got %+v", pods)
+	}
+}
+
+func TestGetControllerRevisionsForStatefulSet(t *testing.T) {
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default"}}
+	cr := &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{Name: "db-rev-1", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}}}, Revision: 1}
+	otherCr := &appsv1.ControllerRevision{ObjectMeta: metav1.ObjectMeta{Name: "other-rev-1", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "other"}}}, Revision: 1}
+	client := fake.NewSimpleClientset(sts, cr, otherCr)
+
+	crs, err := GetControllerRevisionsForStatefulSet(client, "default", sts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(crs) != 1 || crs[0].Name != cr.Name {
+		t.Fatalf("expected only owned ControllerRevision, got %+v", crs)
+	}
+}
+
+func TestGetDaemonSetPodsFollowsDirectOwnership(t *testing.T) {
+	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "kube-system"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "agent-node1", Namespace: "kube-system", OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "agent"}}}}
+	unrelated := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "other-pod", Namespace: "kube-system", OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "other"}}}}
+	client := fake.NewSimpleClientset(ds, pod, unrelated)
+
+	pods, err := GetDaemonSetPods(client, "kube-system", ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods) != 1 || pods[0].Name != pod.Name {
+		t.Fatalf("expected only owned DaemonSet pod, got %+v", pods)
+	}
+}

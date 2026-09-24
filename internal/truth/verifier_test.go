@@ -119,3 +119,157 @@ func TestParseImageReference(t *testing.T) {
 		}
 	}
 }
+
+func statefulSet(containers, init []corev1.Container) *appsv1.StatefulSet {
+	replicas := int32(1)
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: containers, InitContainers: init}}},
+		Status:     appsv1.StatefulSetStatus{CurrentRevision: "db-rev-1", UpdateRevision: "db-rev-1", Replicas: 1, ReadyReplicas: 1},
+	}
+}
+
+func readyStsPod(name, rev string, statuses, init []corev1.ContainerStatus) corev1.Pod {
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       "default",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}},
+			Labels:          map[string]string{"controller-revision-hash": rev},
+		},
+		Status: corev1.PodStatus{
+			Conditions:             []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			ContainerStatuses:     statuses,
+			InitContainerStatuses: init,
+		},
+	}
+}
+
+func TestStatefulSetCurrentRevisionMatches(t *testing.T) {
+	sts := statefulSet([]corev1.Container{{Name: "db", Image: "db@" + appDigest}}, nil)
+	pod := readyStsPod("db-0", "db-rev-1", []corev1.ContainerStatus{status("db", appDigest)}, nil)
+	crs := []appsv1.ControllerRevision{{ObjectMeta: metav1.ObjectMeta{Name: "db-rev-1", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}}}, Revision: 1}}
+
+	res := BuildStatefulSetResultWithControllerRevisions(sts, crs, []corev1.Pod{pod})
+	if res.Status != StatusMatch {
+		t.Fatalf("want MATCH, got %s: %+v", res.Status, res.Findings)
+	}
+}
+
+func TestStatefulSetOldRevisionExcluded(t *testing.T) {
+	sts := statefulSet([]corev1.Container{{Name: "db", Image: "db@" + appDigest}}, nil)
+	sts.Status.UpdateRevision = "db-rev-2"
+
+	podNew := readyStsPod("db-1", "db-rev-2", []corev1.ContainerStatus{status("db", appDigest)}, nil)
+	podOld := readyStsPod("db-0", "db-rev-1", []corev1.ContainerStatus{status("db", appDigest)}, nil)
+	crs := []appsv1.ControllerRevision{
+		{ObjectMeta: metav1.ObjectMeta{Name: "db-rev-1", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}}}, Revision: 1},
+		{ObjectMeta: metav1.ObjectMeta{Name: "db-rev-2", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}}}, Revision: 2},
+	}
+
+	res := BuildStatefulSetResultWithControllerRevisions(sts, crs, []corev1.Pod{podNew, podOld})
+	if res.Status != StatusMatch || res.Summary.Observed != 1 {
+		t.Fatalf("want MATCH with 1 observed current pod, got %s (observed=%d): %+v", res.Status, res.Summary.Observed, res.Findings)
+	}
+	foundOldFinding := false
+	for _, f := range res.Findings {
+		if f.Code == "old-revision-pod" {
+			foundOldFinding = true
+		}
+	}
+	if !foundOldFinding {
+		t.Fatalf("expected old-revision-pod finding")
+	}
+}
+
+func TestStatefulSetDigestMismatch(t *testing.T) {
+	sts := statefulSet([]corev1.Container{{Name: "db", Image: "db@" + appDigest}}, nil)
+	pod := readyStsPod("db-0", "db-rev-1", []corev1.ContainerStatus{status("db", proxyDigest)}, nil)
+	crs := []appsv1.ControllerRevision{{ObjectMeta: metav1.ObjectMeta{Name: "db-rev-1", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: "db"}}}, Revision: 1}}
+
+	res := BuildStatefulSetResultWithControllerRevisions(sts, crs, []corev1.Pod{pod})
+	if res.Status != StatusPartial {
+		t.Fatalf("want PARTIAL for digest mismatch, got %s", res.Status)
+	}
+}
+
+func TestStatefulSetUnknownRevision(t *testing.T) {
+	sts := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default"},
+		Spec:       appsv1.StatefulSetSpec{Replicas: func() *int32 { i := int32(1); return &i }()},
+	}
+	pod := readyStsPod("db-0", "", []corev1.ContainerStatus{status("db", appDigest)}, nil)
+
+	res := BuildStatefulSetResultWithControllerRevisions(sts, nil, []corev1.Pod{pod})
+	if res.Status != StatusUnknown {
+		t.Fatalf("want UNKNOWN for missing revision metadata, got %s", res.Status)
+	}
+}
+
+func daemonSet(containers, init []corev1.Container) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "kube-system"},
+		Spec:       appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: containers, InitContainers: init}}},
+		Status:     appsv1.DaemonSetStatus{DesiredNumberScheduled: 2, CurrentNumberScheduled: 2, NumberReady: 2, UpdatedNumberScheduled: 2},
+	}
+}
+
+func readyDsPod(name, rev string, statuses, init []corev1.ContainerStatus) corev1.Pod {
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       "kube-system",
+			OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "agent"}},
+			Labels:          map[string]string{"controller-revision-hash": rev},
+		},
+		Status: corev1.PodStatus{
+			Conditions:             []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			ContainerStatuses:     statuses,
+			InitContainerStatuses: init,
+		},
+	}
+}
+
+func TestDaemonSetCurrentRevisionMatches(t *testing.T) {
+	ds := daemonSet([]corev1.Container{{Name: "agent", Image: "agent@" + appDigest}}, nil)
+	pod1 := readyDsPod("node-1", "ds-rev-1", []corev1.ContainerStatus{status("agent", appDigest)}, nil)
+	pod2 := readyDsPod("node-2", "ds-rev-1", []corev1.ContainerStatus{status("agent", appDigest)}, nil)
+	crs := []appsv1.ControllerRevision{{ObjectMeta: metav1.ObjectMeta{Name: "ds-rev-1", Namespace: "kube-system", OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "agent"}}}, Revision: 1}}
+
+	res := BuildDaemonSetResultWithControllerRevisions(ds, crs, []corev1.Pod{pod1, pod2})
+	if res.Status != StatusMatch {
+		t.Fatalf("want MATCH, got %s: %+v", res.Status, res.Findings)
+	}
+}
+
+func TestDaemonSetOldRevisionExcluded(t *testing.T) {
+	ds := daemonSet([]corev1.Container{{Name: "agent", Image: "agent@" + appDigest}}, nil)
+	podNew := readyDsPod("node-1", "ds-rev-2", []corev1.ContainerStatus{status("agent", appDigest)}, nil)
+	podOld := readyDsPod("node-2", "ds-rev-1", []corev1.ContainerStatus{status("agent", appDigest)}, nil)
+	crs := []appsv1.ControllerRevision{
+		{ObjectMeta: metav1.ObjectMeta{Name: "ds-rev-1", Namespace: "kube-system", OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "agent"}}}, Revision: 1},
+		{ObjectMeta: metav1.ObjectMeta{Name: "ds-rev-2", Namespace: "kube-system", OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "agent"}}}, Revision: 2},
+	}
+
+	res := BuildDaemonSetResultWithControllerRevisions(ds, crs, []corev1.Pod{podNew, podOld})
+	if res.Status != StatusPartial {
+		t.Fatalf("want PARTIAL due to 1/2 ready current pods, got %s", res.Status)
+	}
+}
+
+func TestDaemonSetDoesNotImposeDeploymentReplicas(t *testing.T) {
+	ds := daemonSet([]corev1.Container{{Name: "agent", Image: "agent@" + appDigest}}, nil)
+	ds.Status.DesiredNumberScheduled = 5
+	ds.Status.NumberReady = 5
+
+	pods := make([]corev1.Pod, 5)
+	for i := 0; i < 5; i++ {
+		pods[i] = readyDsPod("node-"+string(rune('a'+i)), "ds-rev-1", []corev1.ContainerStatus{status("agent", appDigest)}, nil)
+	}
+	crs := []appsv1.ControllerRevision{{ObjectMeta: metav1.ObjectMeta{Name: "ds-rev-1", Namespace: "kube-system", OwnerReferences: []metav1.OwnerReference{{Kind: "DaemonSet", Name: "agent"}}}, Revision: 1}}
+
+	res := BuildDaemonSetResultWithControllerRevisions(ds, crs, pods)
+	if res.Status != StatusMatch || res.Summary.Observed != 5 {
+		t.Fatalf("want MATCH with 5 ready pods, got %s (observed=%d)", res.Status, res.Summary.Observed)
+	}
+}

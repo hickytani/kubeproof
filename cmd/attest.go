@@ -22,16 +22,6 @@ var attestCmd = &cobra.Command{
 		resourceType := strings.ToLower(args[0])
 		name := args[1]
 
-		if resourceType != "workload" {
-			return fmt.Errorf("attest supports 'workload' resource type only; got %q", resourceType)
-		}
-
-		parts := strings.SplitN(name, "/", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "deployment" {
-			return fmt.Errorf("attest workload supports deployment/<name> only")
-		}
-		deploymentName := parts[1]
-
 		namespace, _ := cmd.Flags().GetString("namespace")
 		if namespace == "" {
 			namespace = "default"
@@ -53,36 +43,22 @@ var attestCmd = &cobra.Command{
 			return err
 		}
 
-		// Read the signing key.
 		privateKey, err := attest.ReadPrivateKey(signingKeyPath)
 		if err != nil {
 			return fmt.Errorf("read signing key: %w", err)
 		}
 		publicKey := privateKey.Public().(ed25519.PublicKey)
 
-		// Create Kubernetes client and perform verification.
 		contextName, _ := cmd.Root().Flags().GetString("context")
 		client, err := k8s.NewClientWithContext(contextName)
 		if err != nil {
 			return err
 		}
 
-		dep, err := k8s.GetDeploymentByName(client, namespace, deploymentName)
+		res, err := verifyWorkload(client, namespace, resourceType, name)
 		if err != nil {
 			return err
 		}
-
-		pods, err := k8s.GetDeploymentPods(client, namespace, dep)
-		if err != nil {
-			return err
-		}
-
-		sets, err := k8s.GetReplicaSetsForDeployment(client, namespace, dep)
-		if err != nil {
-			return err
-		}
-
-		res := truth.BuildDeploymentResultWithReplicaSets(dep, sets, pods)
 		truth.ApplyExpectedDigests(&res, expected)
 
 		// Refuse to attest if verification is not MATCH.
